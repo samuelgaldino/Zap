@@ -62,7 +62,11 @@ interface ChatThread {
   sentiment?: SentimentAnalysis;
 }
 
-export const LiveInbox: React.FC = () => {
+export interface LiveInboxProps {
+  onGoToConnect?: () => void;
+}
+
+export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [selectedJid, setSelectedJid] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
@@ -75,6 +79,25 @@ export const LiveInbox: React.FC = () => {
   const [sentimentOverview, setSentimentOverview] = useState<SentimentOverview | null>(null);
   const [showSentimentPanel, setShowSentimentPanel] = useState(true);
   const [isSimulatingSentiment, setIsSimulatingSentiment] = useState(false);
+  const [isSyncingChats, setIsSyncingChats] = useState(false);
+
+  const handleSyncChats = async () => {
+    setIsSyncingChats(true);
+    try {
+      const res = await fetch('/api/whatsapp/sync-chats', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setThreads(data.threads || []);
+        if (data.threads?.length > 0 && !selectedJid) {
+          setSelectedJid(data.threads[0].jid);
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao sincronizar chats:', err);
+    } finally {
+      setIsSyncingChats(false);
+    }
+  };
 
   // Poll chats and sentiments every 2.5 seconds
   useEffect(() => {
@@ -294,7 +317,7 @@ export const LiveInbox: React.FC = () => {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[11px] font-bold text-blue-400 uppercase tracking-wider bg-[#101b33] border border-blue-500/30 px-2.5 py-0.5 rounded-full">
-              Pipeline Ao Vivo
+              Monitor de Contatos
             </span>
             <span className="text-[11px] font-bold text-[#c084fc] bg-[#1e153b] border border-[#7e22ce]/40 px-2 py-0.5 rounded-full uppercase">
               IA Gemini Multimodal
@@ -304,7 +327,7 @@ export const LiveInbox: React.FC = () => {
             </span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-            Monitor de Conversas & Análise de Sentimento com IA
+            Monitor de Contatos & Sentimento em Tempo Real
           </h1>
           <p className="text-xs text-[#94a3b8] mt-0.5 max-w-3xl">
             Acompanhe a IA ouvindo áudios, reagindo com emojis e classificando o sentimento de cada
@@ -315,6 +338,15 @@ export const LiveInbox: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+          <button
+            onClick={handleSyncChats}
+            disabled={isSyncingChats}
+            className="flex items-center gap-2 bg-[#101b33] hover:bg-[#162547] text-blue-300 border border-blue-500/30 px-3.5 py-1.5 rounded-full text-xs font-semibold transition cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingChats ? 'animate-spin' : ''}`} />
+            <span>{isSyncingChats ? 'Sincronizando...' : 'Sincronizar Contatos'}</span>
+          </button>
+
           <button
             onClick={() => setShowSentimentPanel(!showSentimentPanel)}
             className="flex items-center gap-2 bg-[#0e1628] hover:bg-[#15223c] text-white border border-[#1a263d] px-3.5 py-1.5 rounded-full text-xs font-semibold transition cursor-pointer"
@@ -336,7 +368,7 @@ export const LiveInbox: React.FC = () => {
           </div>
 
           <div className="bg-[#0e1628] border border-[#1a263d] text-[#94a3b8] px-3 py-1.5 rounded-full text-xs font-mono">
-            {threads.length} Conversas Ativas
+            {threads.length} Contatos Reais
           </div>
         </div>
       </div>
@@ -1065,15 +1097,35 @@ export const LiveInbox: React.FC = () => {
               </div>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-[#64748b]">
-              <div className="w-16 h-16 rounded-2xl bg-[#101b33] border border-blue-500/30 text-blue-400 flex items-center justify-center mb-3">
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-[#64748b] space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-[#101b33] border border-blue-500/30 text-blue-400 flex items-center justify-center">
                 <MessageSquare className="w-8 h-8" />
               </div>
-              <h3 className="text-base font-bold text-white">Nenhuma conversa selecionada</h3>
-              <p className="text-xs text-[#94a3b8] max-w-sm mt-1">
-                Conecte seu WhatsApp e acompanhe as mensagens de clientes e análise de sentimento em
-                tempo real.
-              </p>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-white">Nenhum contato selecionado</h3>
+                <p className="text-xs text-[#94a3b8] max-w-sm mx-auto">
+                  A base de dados fictícia foi zerada. Suas conversas reais do WhatsApp aparecerão automaticamente assim que sincronizadas.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {onGoToConnect && (
+                  <button
+                    onClick={onGoToConnect}
+                    className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2 rounded-xl transition cursor-pointer shadow-lg shadow-blue-600/25"
+                  >
+                    Conectar WhatsApp
+                  </button>
+                )}
+                <button
+                  onClick={handleSyncChats}
+                  disabled={isSyncingChats}
+                  className="bg-[#15223c] hover:bg-[#1e2f52] text-blue-300 border border-blue-500/40 text-xs font-semibold px-4 py-2 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingChats ? 'animate-spin' : ''}`} />
+                  <span>Sincronizar Contatos Reais</span>
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -3,28 +3,28 @@ import {
   Search,
   Bell,
   Plus,
-  ChevronDown,
   Sun,
-  GitFork,
   Users,
   CheckSquare,
-  Calendar,
-  DollarSign,
-  BarChart3,
-  Send,
-  MessageSquare,
-  Settings,
-  Shield,
-  Smartphone,
-  Bot,
-  Inbox,
-  BookOpen,
-  Code2,
-  Sparkles,
   Clock,
+  Settings,
+  GitCommit,
+  BellRing,
+  Activity,
+  MessageSquare,
+  BarChart3,
 } from 'lucide-react';
 
-export type ActiveTab = 'connect' | 'broadcast' | 'training' | 'schedule' | 'inbox' | 'deploy' | 'code';
+export type ActiveTab =
+  | 'connect'
+  | 'inbox'
+  | 'analytics'
+  | 'followup'
+  | 'reminders'
+  | 'broadcast'
+  | 'training'
+  | 'schedule'
+  | 'code';
 
 interface NavbarProps {
   activeTab: ActiveTab;
@@ -36,7 +36,8 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
   const [waConnected, setWaConnected] = useState(false);
   const [userPhone, setUserPhone] = useState<string | null>(null);
   const [isResting, setIsResting] = useState(false);
-  const [currentTime, setCurrentTime] = useState('18:54:16');
+  const [realLeadsCount, setRealLeadsCount] = useState(0);
+  const [currentTime, setCurrentTime] = useState('');
 
   useEffect(() => {
     const updateTime = () => {
@@ -48,7 +49,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
     return () => clearInterval(timer);
   }, []);
 
-  // Poll status to reflect live indicator
   useEffect(() => {
     const checkStatus = async () => {
       try {
@@ -57,14 +57,19 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
           const data = await res.json();
           setWaConnected(data.status === 'connected');
           setUserPhone(data.userPhone || null);
+          if (data.stats?.activeChats !== undefined) {
+            setRealLeadsCount(data.stats.activeChats);
+          }
         }
 
-        const schedRes = await fetch('/api/whatsapp/schedule/status');
-        if (schedRes.ok) {
-          const schedData = await schedRes.json();
+        const resSched = await fetch('/api/whatsapp/schedule/status');
+        if (resSched.ok) {
+          const schedData = await resSched.json();
           setIsResting(!schedData.status?.isWithinHours);
         }
-      } catch {}
+      } catch (err) {
+        console.error(err);
+      }
     };
 
     checkStatus();
@@ -82,10 +87,27 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
     },
     {
       id: 'inbox' as ActiveTab,
-      label: 'Pipeline Ao Vivo',
-      icon: GitFork,
-      countBadge: '218',
+      label: 'Monitor de Contatos',
+      icon: MessageSquare,
+      countBadge: realLeadsCount > 0 ? String(realLeadsCount) : undefined,
       badgeColor: 'bg-blue-500/20 text-blue-400 border border-blue-500/40',
+    },
+    {
+      id: 'analytics' as ActiveTab,
+      label: 'Métricas & Conversão',
+      icon: BarChart3,
+      countBadge: 'BI',
+      badgeColor: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40',
+    },
+    {
+      id: 'followup' as ActiveTab,
+      label: 'Follow-Up',
+      icon: GitCommit,
+    },
+    {
+      id: 'reminders' as ActiveTab,
+      label: 'Lembretes Pré-Call',
+      icon: BellRing,
     },
     {
       id: 'broadcast' as ActiveTab,
@@ -96,8 +118,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
       id: 'training' as ActiveTab,
       label: 'Treinamento IA',
       icon: CheckSquare,
-      countBadge: '1',
-      badgeColor: 'bg-rose-500/20 text-rose-400 border border-rose-500/40',
     },
     {
       id: 'schedule' as ActiveTab,
@@ -105,11 +125,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
       icon: Clock,
       countBadge: isResting ? 'Pausa' : undefined,
       badgeColor: 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40',
-    },
-    {
-      id: 'deploy' as ActiveTab,
-      label: 'Templates & Deploy',
-      icon: MessageSquare,
     },
     {
       id: 'code' as ActiveTab,
@@ -125,23 +140,20 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
       {/* Top Bar */}
       <div className="max-w-[1700px] mx-auto px-4 sm:px-6">
         <div className="flex items-center justify-between h-16 gap-4">
-          {/* Logo & Subtitle */}
+          {/* Logo & Branding */}
           <div className="flex items-center gap-3 shrink-0">
             <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center font-extrabold text-white text-base shadow-lg shadow-blue-600/30">
               A
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-extrabold text-base text-white tracking-tight lowercase">
-                  arco wpp
+                <span className="font-extrabold text-base text-white tracking-tight">
+                  ArcoZapp
                 </span>
                 <span className="bg-[#1e153b] text-[#c084fc] border border-[#7e22ce]/40 text-[10px] font-bold px-1.5 py-0.2 rounded uppercase tracking-wider">
-                  MASTER
+                  PRO
                 </span>
               </div>
-              <p className="text-[11px] text-[#64748b] hidden md:block">
-                Foco em processos, follow-up, reuniões e alta conversão comercial
-              </p>
             </div>
           </div>
 
@@ -151,7 +163,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
               <Search className="w-4 h-4 text-[#64748b] shrink-0" />
               <input
                 type="text"
-                placeholder="Buscar leads, tarefas, reuniões... (Ctrl+K)"
+                placeholder="Buscar contatos, tarefas, reuniões... (Ctrl+K)"
                 className="w-full bg-transparent text-xs text-white placeholder-[#64748b] px-2.5 focus:outline-none"
               />
               <span className="text-[10px] text-[#64748b] bg-[#17233d] px-1.5 py-0.5 rounded border border-[#223558] font-mono">
@@ -162,42 +174,22 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
 
           {/* Right Action Elements */}
           <div className="flex items-center gap-2.5 shrink-0">
-            {/* Lembretes pill */}
-            <div className="hidden sm:flex items-center gap-1.5 bg-[#1f1322] border border-[#831843]/50 text-[#f472b6] px-3 py-1.5 rounded-full text-xs font-semibold">
-              <Bell className="w-3.5 h-3.5" />
-              <span>1 Lembretes</span>
-            </div>
-
-            {/* Leads Counter pill */}
-            <div className="hidden md:flex items-center gap-1.5 bg-[#0a1b24] border border-[#065f46]/50 text-[#34d399] px-3 py-1.5 rounded-full text-xs font-medium">
-              <span className="w-2 h-2 rounded-full bg-[#10b981] animate-pulse"></span>
-              <span>246 leads</span>
+            {/* Real Leads / Contacts pill */}
+            <div className="hidden md:flex items-center gap-1.5 bg-[#0a1b24] border border-[#065f46]/50 text-[#34d399] px-3.5 py-1.5 rounded-full text-xs font-medium">
+              <span className={`w-2 h-2 rounded-full ${waConnected ? 'bg-[#10b981] animate-pulse' : 'bg-slate-500'}`}></span>
+              <span>{waConnected ? `${realLeadsCount} contatos sincronizados` : 'WhatsApp desconectado'}</span>
               <span className="text-[#059669]">•</span>
               <span className="text-[#94a3b8] font-mono text-[11px]">{currentTime}</span>
             </div>
 
-            {/* CTA Button */}
+            {/* Quick Action Button */}
             <button
-              onClick={() => setActiveTab('broadcast')}
+              onClick={() => setActiveTab('reminders')}
               className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs sm:text-sm px-4 py-2 rounded-full shadow-lg shadow-blue-600/25 transition cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>+ Novo Lead</span>
+              <span>Nova Pré-Call</span>
             </button>
-
-            {/* User Profile Pill */}
-            <div className="flex items-center gap-2 bg-[#0d1527] border border-[#1e293b] rounded-full px-2.5 py-1 cursor-pointer hover:border-slate-700 transition">
-              <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs">
-                S
-              </div>
-              <div className="hidden sm:block text-left leading-tight">
-                <span className="text-xs font-bold text-white block">Samuel Galdino</span>
-                <span className="text-[9px] text-[#64748b] font-mono uppercase tracking-wider block">
-                  MASTER
-                </span>
-              </div>
-              <ChevronDown className="w-3 h-3 text-[#64748b]" />
-            </div>
           </div>
         </div>
 

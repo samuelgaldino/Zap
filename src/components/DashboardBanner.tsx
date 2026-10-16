@@ -32,7 +32,7 @@ export const DashboardBanner: React.FC<DashboardBannerProps> = ({
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold text-[#60a5fa] mb-2">
             <Sun className="w-3.5 h-3.5 text-[#60a5fa]" />
-            <span>Rotina Comercial Prioritária • arco wpp</span>
+            <span>Rotina Comercial Prioritária • ArcoZapp</span>
           </div>
 
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight flex items-center gap-2">

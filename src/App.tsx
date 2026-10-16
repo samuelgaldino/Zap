@@ -4,12 +4,14 @@ import { WhatsAppConnect } from './components/WhatsAppConnect';
 import { BroadcastManager } from './components/BroadcastManager';
 import { TrainingStudio } from './components/TrainingStudio';
 import { LiveInbox } from './components/LiveInbox';
-import { RenderDeployGuide } from './components/RenderDeployGuide';
-import { CodeExporter } from './components/CodeExporter';
+import { AnalyticsDashboard } from './components/AnalyticsDashboard';
+import { FollowUpManager } from './components/FollowUpManager';
+import { PreCallReminders } from './components/PreCallReminders';
+import { AgentSettingsView } from './components/AgentSettingsView';
 import { BotScheduleSettings } from './components/BotScheduleSettings';
 import { BotConfig } from './types';
 import { BUSINESS_PRESETS } from './data/presets';
-import { Smartphone, ExternalLink } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('connect');
@@ -33,6 +35,26 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'inbox' && (
+          <LiveInbox onGoToConnect={() => setActiveTab('connect')} />
+        )}
+
+        {activeTab === 'analytics' && (
+          <AnalyticsDashboard
+            onGoToInbox={() => setActiveTab('inbox')}
+            onGoToReminders={() => setActiveTab('reminders')}
+            onGoToFollowUp={() => setActiveTab('followup')}
+          />
+        )}
+
+        {activeTab === 'followup' && (
+          <FollowUpManager />
+        )}
+
+        {activeTab === 'reminders' && (
+          <PreCallReminders />
+        )}
+
         {activeTab === 'broadcast' && (
           <BroadcastManager />
         )}
@@ -51,20 +73,8 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'inbox' && (
-          <LiveInbox />
-        )}
-
-        {activeTab === 'deploy' && (
-          <RenderDeployGuide />
-        )}
-
         {activeTab === 'code' && (
-          <CodeExporter
-            botConfig={botConfig}
-            onGoToTraining={() => setActiveTab('training')}
-            onGoToInbox={() => setActiveTab('inbox')}
-          />
+          <AgentSettingsView />
         )}
       </main>
 
@@ -75,9 +85,9 @@ export default function App() {
             <div className="w-5 h-5 rounded-md bg-blue-600 flex items-center justify-center text-white text-[10px] font-bold shadow-md shadow-blue-600/30">
               A
             </div>
-            <span className="font-semibold text-slate-200">arco wpp</span>
+            <span className="font-semibold text-slate-200">ArcoZapp</span>
             <span className="text-[#64748b] hidden sm:inline">•</span>
-            <span className="text-[#94a3b8]">IA Humanizada, Áudios, Reações e WhatsApp Autônomo Conectado</span>
+            <span className="text-[#94a3b8]">Central de Atendimento Humanizado, Follow-Up & Lembretes</span>
           </div>
 
           <div className="flex items-center gap-5">
@@ -88,31 +98,35 @@ export default function App() {
               Conexão WhatsApp
             </button>
             <button
-              onClick={() => setActiveTab('training')}
+              onClick={() => setActiveTab('inbox')}
               className="hover:text-blue-400 transition cursor-pointer text-[#94a3b8]"
             >
-              Treinamento IA
+              Monitor de Contatos
+            </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className="hover:text-blue-400 transition cursor-pointer text-[#94a3b8]"
+            >
+              Métricas & BI
+            </button>
+            <button
+              onClick={() => setActiveTab('followup')}
+              className="hover:text-blue-400 transition cursor-pointer text-[#94a3b8]"
+            >
+              Follow-Up
+            </button>
+            <button
+              onClick={() => setActiveTab('reminders')}
+              className="hover:text-blue-400 transition cursor-pointer text-[#94a3b8]"
+            >
+              Lembretes Pré-Call
             </button>
             <button
               onClick={() => setActiveTab('code')}
               className="hover:text-blue-400 transition cursor-pointer text-[#94a3b8]"
             >
-              Logs do Sistema
+              Configurações
             </button>
-            <button
-              onClick={() => setActiveTab('inbox')}
-              className="hover:text-blue-400 transition cursor-pointer text-[#94a3b8]"
-            >
-              Monitor Ao Vivo
-            </button>
-            <a
-              href="https://aistudio.google.com"
-              target="_blank"
-              rel="noreferrer"
-              className="hover:text-blue-400 transition flex items-center gap-1 text-[#94a3b8]"
-            >
-              Google AI Studio <ExternalLink className="w-3 h-3" />
-            </a>
           </div>
         </div>
       </footer>

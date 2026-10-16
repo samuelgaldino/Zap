@@ -24,6 +24,10 @@ import {
   Volume2,
   Zap,
   Activity,
+  FileUp,
+  FileText,
+  Upload,
+  RefreshCw,
 } from 'lucide-react';
 import { BotScheduleSettings } from './BotScheduleSettings';
 
@@ -70,11 +74,17 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
     humanizedEmojis: true,
   });
 
-  const [activeSubTab, setActiveSubTab] = useState<'content' | 'schedule'>('content');
+  const [activeSubTab, setActiveSubTab] = useState<'content' | 'importScript' | 'schedule'>('content');
   const [loading, setLoading] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [newRule, setNewRule] = useState('');
   const [newKeyword, setNewKeyword] = useState('');
+
+  // Script import state
+  const [scriptPastedText, setScriptPastedText] = useState('');
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  const [isAnalyzingScript, setIsAnalyzingScript] = useState(false);
+  const [importResult, setImportResult] = useState<any | null>(null);
 
   // Test prompt simulator state
   const [testQuestion, setTestQuestion] = useState('');
@@ -114,6 +124,55 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
       alert('Erro ao salvar treinamento.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadedFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (content) {
+        setScriptPastedText(content);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleProcessScript = async () => {
+    if (!scriptPastedText.trim() || isAnalyzingScript) return;
+    setIsAnalyzingScript(true);
+    setImportResult(null);
+
+    try {
+      const res = await fetch('/api/training/import-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scriptText: scriptPastedText,
+          fileName: uploadedFileName || 'Texto colado',
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setImportResult(data.data);
+        if (data.training) {
+          setTraining(data.training);
+        }
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 4000);
+      } else {
+        const errData = await res.json();
+        alert(errData.error || 'Erro ao processar script.');
+      }
+    } catch (err) {
+      console.error('Falha ao importar script:', err);
+      alert('Erro na conexão ao analisar script.');
+    } finally {
+      setIsAnalyzingScript(false);
     }
   };
 
@@ -214,8 +273,8 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
         </div>
       </div>
 
-      {/* Sub Tabs: Treinamento vs Horários de Pausa & Descanso */}
-      <div className="flex items-center gap-2 border-b border-[#1a263d] pb-3">
+      {/* Sub Tabs: Treinamento vs Importar Script vs Horários de Pausa */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-[#1a263d] pb-3">
         <button
           onClick={() => setActiveSubTab('content')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
@@ -229,6 +288,21 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
         </button>
 
         <button
+          onClick={() => setActiveSubTab('importScript')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            activeSubTab === 'importScript'
+              ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+              : 'bg-[#0e1628] text-[#94a3b8] hover:text-white border border-[#1a263d]'
+          }`}
+        >
+          <FileUp className="w-4 h-4 text-emerald-400" />
+          <span>Importar Script / Documento</span>
+          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded font-mono">
+            IA Gemini
+          </span>
+        </button>
+
+        <button
           onClick={() => setActiveSubTab('schedule')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
             activeSubTab === 'schedule'
@@ -237,15 +311,136 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
           }`}
         >
           <Clock className="w-4 h-4 text-amber-400" />
-          <span>Horários de Pausa & Descanso da IA</span>
-          <span className="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 px-2 py-0.5 rounded font-mono">
-            Expediente
-          </span>
+          <span>Horários de Pausa & Descanso</span>
         </button>
       </div>
 
       {activeSubTab === 'schedule' ? (
         <BotScheduleSettings />
+      ) : activeSubTab === 'importScript' ? (
+        <div className="space-y-6">
+          <div className="bg-[#0e1628] rounded-2xl border border-[#1a263d] p-6 shadow-xl space-y-6">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-mono text-emerald-400 uppercase tracking-wider mb-1">
+                <Sparkles className="w-4 h-4" />
+                <span>Síntese Automática com Gemini 3.8 Flash</span>
+              </div>
+              <h2 className="text-lg font-bold text-white">
+                Envie seu Script Comercial ou Manual de Vendas
+              </h2>
+              <p className="text-xs text-[#94a3b8] mt-1 max-w-2xl">
+                Você não precisa digitar regra por regra! Envie seu PDF, DOCX, TXT ou cole o roteiro abaixo. A inteligência artificial extrairá a proposta de valor, regras de ouro, dúvidas frequentes e montará o prompt ideal para você.
+              </p>
+            </div>
+
+            {/* Upload Zone */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="border-2 border-dashed border-[#1e293b] hover:border-blue-500/50 rounded-xl p-6 text-center space-y-3 bg-[#070b14]/50 transition flex flex-col items-center justify-center">
+                <FileUp className="w-8 h-8 text-blue-400" />
+                <div>
+                  <div className="text-xs font-semibold text-white">
+                    {uploadedFileName ? uploadedFileName : 'Clique para selecionar arquivo de script'}
+                  </div>
+                  <div className="text-[11px] text-[#64748b] mt-0.5">
+                    Suporta .txt, .docx, .pdf, .md
+                  </div>
+                </div>
+                <label className="bg-[#1e293b] hover:bg-[#334155] text-white text-xs font-semibold px-4 py-2 rounded-lg cursor-pointer transition">
+                  <span>Procurar Documento</span>
+                  <input
+                    type="file"
+                    accept=".txt,.md,.doc,.docx,.pdf"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              {/* Paste Text Area */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Ou cole o texto do roteiro / documento aqui:
+                </label>
+                <textarea
+                  rows={6}
+                  placeholder="Cole aqui seu script de vendas, perguntas frequentes, tabela de preços, regras de atendimento ou manual da empresa..."
+                  value={scriptPastedText}
+                  onChange={(e) => setScriptPastedText(e.target.value)}
+                  className="w-full bg-[#070b14] border border-[#1e293b] rounded-xl p-3.5 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500 font-sans"
+                />
+              </div>
+            </div>
+
+            {/* Action Button */}
+            <div className="flex items-center justify-between border-t border-[#1a263d] pt-4">
+              <div className="text-xs text-[#64748b]">
+                {scriptPastedText.length > 0 && `${scriptPastedText.length} caracteres detectados`}
+              </div>
+
+              <button
+                onClick={handleProcessScript}
+                disabled={!scriptPastedText.trim() || isAnalyzingScript}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold text-xs sm:text-sm px-6 py-2.5 rounded-xl shadow-lg shadow-emerald-600/25 flex items-center gap-2 cursor-pointer transition"
+              >
+                {isAnalyzingScript ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>IA Analisando Script & Montando Prompt...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Analisar com IA & Configurar Bot</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Result Preview Card */}
+            {importResult && (
+              <div className="bg-[#070b14] border border-emerald-500/40 rounded-xl p-5 space-y-4 animate-fadeIn">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+                  <Check className="w-5 h-5 bg-emerald-500/20 rounded-full p-0.5" />
+                  <span>Script Comercial Integrado com Sucesso!</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-[#0e1628] p-3 rounded-lg border border-[#1a263d]">
+                  <div>
+                    <span className="text-[#64748b] block text-[10px] uppercase">Empresa:</span>
+                    <span className="font-semibold text-white">{importResult.businessName}</span>
+                  </div>
+                  <div>
+                    <span className="text-[#64748b] block text-[10px] uppercase">Nicho:</span>
+                    <span className="font-semibold text-white">{importResult.niche}</span>
+                  </div>
+                  <div>
+                    <span className="text-[#64748b] block text-[10px] uppercase">Atendente:</span>
+                    <span className="font-semibold text-white">{importResult.personaName}</span>
+                  </div>
+                </div>
+
+                {importResult.summary && (
+                  <p className="text-xs text-[#94a3b8] italic bg-[#0e1628] p-3 rounded-lg border border-[#1a263d]">
+                    "{importResult.summary}"
+                  </p>
+                )}
+
+                <div className="flex items-center justify-between pt-2">
+                  <span className="text-xs text-[#94a3b8]">
+                    As regras e base de conhecimento já foram salvas no ArcoZapp.
+                  </span>
+                  <button
+                    onClick={() => setActiveSubTab('content')}
+                    className="text-xs font-bold text-blue-400 hover:text-blue-300 transition flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Ver Base de Conhecimento Gerada</span>
+                    <span>→</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       ) : (
         <>
           {saveSuccess && (

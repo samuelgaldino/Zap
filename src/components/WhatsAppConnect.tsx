@@ -330,7 +330,7 @@ export const WhatsAppConnect: React.FC<WhatsAppConnectProps> = ({
                     className="w-full sm:w-auto flex items-center justify-center gap-2 bg-[#121c33] hover:bg-[#182645] text-white border border-[#223558] font-medium text-xs sm:text-sm px-5 py-2.5 rounded-full transition cursor-pointer"
                   >
                     <MessageSquare className="w-4 h-4" />
-                    Ver Mensagens Ao Vivo
+                    Monitor de Contatos
                   </button>
                 </div>
               </div>

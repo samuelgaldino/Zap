@@ -1,0 +1,6 @@
+{
+  "summary": "Plano de implementação completo para o ArcoZapp: atualização da marca e branding, remoção de tutoriais/códigos expostos, renomeação para 'Monitor de Contatos', cadência modular de follow-up, sistema de lembretes pré-call em grupos, limpeza de leads fakes com sincronização real do WhatsApp, importação inteligente de scripts de treinamento via IA Gemini e configurações comportamentais do agente (tempo de resposta, humanização e limite de caracteres).",
+  "updatedAt": "2026-10-16T16:17:37.588861886Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

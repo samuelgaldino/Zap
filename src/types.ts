@@ -102,3 +102,148 @@ export interface SentimentOverview {
   alertCount: number;
 }
 
+// ==========================================
+// FOLLOW-UP CADENCE SYSTEM TYPES
+// ==========================================
+export type FollowUpStyle =
+  | 'casual_amigavel'
+  | 'urgencia_fechamento'
+  | 'prova_social'
+  | 'pergunta_direta'
+  | 'conteudo_valor'
+  | 'custom';
+
+export interface FollowUpStep {
+  id: string;
+  name: string; // e.g. "D+1 - Checagem Inicial"
+  daysAfter: number; // dias após o último contato
+  time: string; // "10:00"
+  messageStyle: FollowUpStyle;
+  template: string;
+  enabled: boolean;
+}
+
+export interface FollowUpContact {
+  id: string;
+  name: string;
+  phone: string;
+  jid: string;
+  currentStepIndex: number; // 0 = D+1, 1 = D+3, etc.
+  status: 'active' | 'paused' | 'responded' | 'completed' | 'cancelled';
+  enteredAt: string;
+  lastMessageSentAt?: string;
+  nextScheduledAt?: string;
+  notes?: string;
+}
+
+export interface FollowUpCadenceConfig {
+  enabled: boolean;
+  cadenceName: string;
+  autoTriggerWhenNoReply: boolean;
+  stopOnCustomerReply: boolean;
+  steps: FollowUpStep[];
+}
+
+// ==========================================
+// PRE-CALL REMINDERS & GROUPS SYSTEM TYPES
+// ==========================================
+export interface PreCallStage {
+  id: string;
+  label: string; // e.g. "24h antes", "2h antes", "15 min antes"
+  hoursBefore: number; // 24, 2, 0.25 (15 min)
+  template: string;
+  enabled: boolean;
+}
+
+export interface PreCallMeeting {
+  id: string;
+  title: string;
+  leadName: string;
+  targetType: 'contact' | 'group';
+  targetJid: string; // individual JID or WhatsApp group JID
+  targetName: string; // Contact name or WhatsApp Group Name
+  targetGroupLink?: string; // Group invite link or name
+  meetingDateTime: string; // "YYYY-MM-DDTHH:mm"
+  meetingLink: string; // Google Meet / Zoom link
+  stagesSent: Record<string, boolean>; // e.g. { "24h": true, "2h": false, "15m": false }
+  status: 'scheduled' | 'completed' | 'cancelled';
+  notes?: string;
+  createdAt: string;
+}
+
+export interface PreCallConfig {
+  enabled: boolean;
+  defaultMeetLink: string;
+  stages: PreCallStage[];
+}
+
+// ==========================================
+// ADVANCED AGENT CONFIGURATION TYPES
+// ==========================================
+export interface AgentBehaviorSettings {
+  simulatedTypingDelay: number; // 1 to 15 seconds
+  humanizationLevel: 'ultra' | 'moderate' | 'formal';
+  maxCharactersPerMessage: number; // 150 to 800
+  splitLongMessages: boolean; // divide em balões menores
+  enableAudioListening: boolean;
+  enableContextReactions: boolean;
+  humanizedEmojis: boolean;
+  autoReplyOnlyPrivate: boolean;
+  ignoreGroupMessages: boolean;
+}
+
+// ==========================================
+// ANALYTICS & CONVERSION TYPES
+// ==========================================
+export interface AnalyticsSummary {
+  activeContacts: number;
+  totalMessagesSent: number;
+  totalMessagesReceived: number;
+  responseRate: number;
+  avgResponseTime: string;
+  scheduledPreCalls: number;
+  closedDeals: number;
+  conversionRate: string;
+  autonomousPercentage: string;
+}
+
+export interface AnalyticsTimeSeriesPoint {
+  label: string;
+  enviadas: number;
+  recebidas: number;
+  contatosAtivos: number;
+  taxaResposta: number;
+}
+
+export interface FunnelStep {
+  name: string;
+  value: number;
+  rate: string;
+  color: string;
+}
+
+export interface DistributionItem {
+  name: string;
+  value: number;
+  color: string;
+}
+
+export interface PeakHourItem {
+  time: string;
+  volume: number;
+  taxa: number;
+  status: string;
+}
+
+export interface AnalyticsData {
+  success: boolean;
+  period: '24h' | '7d' | '30d';
+  summary: AnalyticsSummary;
+  timeSeries: AnalyticsTimeSeriesPoint[];
+  conversionFunnel: FunnelStep[];
+  sentimentDistribution: DistributionItem[];
+  messageTypes: DistributionItem[];
+  peakHours: PeakHourItem[];
+}
+
+
