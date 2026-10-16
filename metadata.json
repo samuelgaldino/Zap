@@ -1,0 +1,6 @@
+{
+  "name": "ZapGemini - Bot de WhatsApp Autônomo com IA",
+  "description": "Conecte seu WhatsApp real via QR Code para responder clientes de forma 100% autônoma com treinamento personalizado e inteligência artificial Gemini gratuita.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
