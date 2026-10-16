@@ -343,9 +343,8 @@ export interface ChatThread {
   sentiment?: SentimentAnalysis;
 }
 
-// Zero fake leads: Real WhatsApp Chat Threads strictly populated by connected WhatsApp
-const INITIAL_CHAT_SEEDS: ChatThread[] = [];
-/* const DEPRECATED_SEEDS = [
+/* DEPRECATED_SEEDS removed */
+/*
   {
     jid: '5511977665544@s.whatsapp.net',
     name: 'Marcos Andrade',
@@ -553,9 +552,71 @@ const INITIAL_CHAT_SEEDS: ChatThread[] = [];
   },
 ]; */
 
-// Real WhatsApp Chat Threads (Empty on start, strictly populated by real connected WhatsApp)
-const chatThreads: Map<string, ChatThread> = new Map();
-const knownContacts: Map<string, { name?: string; notify?: string; phone: string }> = new Map();
+// Paths to persist real WhatsApp chats and contacts data
+const CHATS_FILE = path.resolve(__dirname, 'whatsapp_chats.json');
+const CONTACTS_FILE = path.resolve(__dirname, 'whatsapp_contacts.json');
+
+function loadSavedWhatsAppChats(): Map<string, ChatThread> {
+  const map = new Map<string, ChatThread>();
+  try {
+    if (fs.existsSync(CHATS_FILE)) {
+      const raw = fs.readFileSync(CHATS_FILE, 'utf-8');
+      const list: ChatThread[] = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          if (item && item.jid) {
+            map.set(item.jid, item);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Erro ao carregar conversas salvas do WhatsApp:', err);
+  }
+  return map;
+}
+
+function saveWhatsAppChats() {
+  try {
+    const list = Array.from(chatThreads.values());
+    fs.writeFileSync(CHATS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Erro ao persistir conversas do WhatsApp:', err);
+  }
+}
+
+function loadSavedWhatsAppContacts(): Map<string, { name?: string; notify?: string; phone: string }> {
+  const map = new Map<string, { name?: string; notify?: string; phone: string }>();
+  try {
+    if (fs.existsSync(CONTACTS_FILE)) {
+      const raw = fs.readFileSync(CONTACTS_FILE, 'utf-8');
+      const list: Array<{ id: string; name?: string; notify?: string; phone: string }> = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          if (item && item.id) {
+            map.set(item.id, { name: item.name, notify: item.notify, phone: item.phone });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Erro ao carregar contatos salvos do WhatsApp:', err);
+  }
+  return map;
+}
+
+function saveWhatsAppContacts() {
+  try {
+    const list = Array.from(knownContacts.entries()).map(([id, val]) => ({ id, ...val }));
+    fs.writeFileSync(CONTACTS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Erro ao persistir contatos do WhatsApp:', err);
+  }
+}
+
+// Real WhatsApp Chat Threads & Contacts (persisted on disk, strictly populated by connected WhatsApp)
+const chatThreads: Map<string, ChatThread> = loadSavedWhatsAppChats();
+const knownContacts: Map<string, { name?: string; notify?: string; phone: string }> = loadSavedWhatsAppContacts();
 
 // =========================================================================
 // FOLLOW-UP CADENCE STORE
@@ -1027,6 +1088,197 @@ export function recordSystemLog(
 let sock: WASocket | null = null;
 let isReconnecting = false;
 
+// Extract content, audio, and metadata from Baileys message
+function extractMessageData(msg: proto.IWebMessageInfo): {
+  remoteJid: string;
+  senderName: string;
+  fromMe: boolean;
+  text: string;
+  timestamp: string;
+  timestampMs: number;
+  isAudio: boolean;
+  reaction?: string;
+} | null {
+  const key = msg.key;
+  if (!key || !key.remoteJid || key.remoteJid === 'status@broadcast') return null;
+
+  const remoteJid = key.remoteJid;
+  const isFromMe = Boolean(key.fromMe);
+
+  const m = msg.message;
+  let text = '';
+  let isAudio = false;
+
+  if (m) {
+    if (m.conversation) {
+      text = m.conversation;
+    } else if (m.extendedTextMessage?.text) {
+      text = m.extendedTextMessage.text;
+    } else if (m.imageMessage?.caption) {
+      text = m.imageMessage.caption;
+    } else if (m.videoMessage?.caption) {
+      text = m.videoMessage.caption;
+    } else if (m.audioMessage) {
+      isAudio = true;
+      text = '🎙️ [Áudio de Voz enviado pelo cliente]';
+    } else if (m.documentMessage?.fileName) {
+      text = `📄 [Documento: ${m.documentMessage.fileName}]`;
+    } else if (m.contactMessage?.displayName) {
+      text = `👤 [Contato: ${m.contactMessage.displayName}]`;
+    } else if (m.locationMessage) {
+      text = '📍 [Localização compartilhada]';
+    } else if (m.reactionMessage?.text) {
+      return {
+        remoteJid,
+        senderName: msg.pushName || 'Contato',
+        fromMe: isFromMe,
+        text: '',
+        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        timestampMs: Date.now(),
+        isAudio: false,
+        reaction: m.reactionMessage.text,
+      };
+    }
+  }
+
+  if (!text && !isAudio) return null;
+
+  let timestampMs = Date.now();
+  if (typeof msg.messageTimestamp === 'number') {
+    timestampMs = msg.messageTimestamp * 1000;
+  } else if (msg.messageTimestamp && typeof (msg.messageTimestamp as any).low === 'number') {
+    timestampMs = (msg.messageTimestamp as any).low * 1000;
+  }
+
+  const date = new Date(timestampMs);
+  const timestamp = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const senderName = isFromMe ? 'Você / IA' : (msg.pushName || remoteJid.split('@')[0]);
+
+  return {
+    remoteJid,
+    senderName,
+    fromMe: isFromMe,
+    text,
+    timestamp,
+    timestampMs,
+    isAudio,
+  };
+}
+
+// Record a historical or synced message into chatThreads
+function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
+  const data = extractMessageData(msg);
+  if (!data) return;
+
+  const { remoteJid, senderName, fromMe, text, timestamp, isAudio } = data;
+  let thread = chatThreads.get(remoteJid);
+  if (!thread) {
+    const contact = knownContacts.get(remoteJid);
+    const phone = remoteJid.split('@')[0];
+    const name = contact?.name || (remoteJid.endsWith('@g.us') ? 'Grupo WhatsApp' : `+${phone}`);
+    thread = {
+      jid: remoteJid,
+      name,
+      lastMessage: text,
+      lastTimestamp: timestamp,
+      unreadCount: 0,
+      messages: [],
+      botPausedForThisChat: false,
+    };
+    chatThreads.set(remoteJid, thread);
+  }
+
+  const msgId = msg.key?.id || `msg-${data.timestampMs}-${Math.random().toString(36).substring(2, 7)}`;
+  const alreadyExists = thread.messages.some((m) => m.id === msgId);
+  if (!alreadyExists) {
+    const liveMsg: LiveLogMessage = {
+      id: msgId,
+      chatJid: remoteJid,
+      senderName,
+      fromMe,
+      text,
+      timestamp,
+      isAudio,
+    };
+    thread.messages.push(liveMsg);
+    if (thread.messages.length > 50) {
+      thread.messages.shift();
+    }
+  }
+
+  thread.lastMessage = text || thread.lastMessage;
+  thread.lastTimestamp = timestamp || thread.lastTimestamp;
+}
+
+// Synchronize all real WhatsApp contacts, participating groups, and active threads
+async function syncRealWhatsAppContactsAndChats(): Promise<{
+  activeChats: number;
+  totalContacts: number;
+  totalMessages: number;
+  threads: ChatThread[];
+}> {
+  if (sock && waState.status === 'connected') {
+    // 1. Fetch all participating WhatsApp groups
+    try {
+      const groups = await sock.groupFetchAllParticipating();
+      if (groups) {
+        for (const [groupId, groupMeta] of Object.entries(groups)) {
+          const participantCount = groupMeta.participants?.length || 0;
+          const groupName = groupMeta.subject || 'Grupo WhatsApp';
+          if (!chatThreads.has(groupId)) {
+            chatThreads.set(groupId, {
+              jid: groupId,
+              name: groupName,
+              lastMessage: `Grupo com ${participantCount} participantes`,
+              lastTimestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+              unreadCount: 0,
+              messages: [],
+              botPausedForThisChat: false,
+            });
+          } else {
+            const t = chatThreads.get(groupId)!;
+            t.name = groupName;
+          }
+        }
+      }
+    } catch (gErr) {
+      console.warn('Aviso: busca de grupos retornou:', gErr);
+    }
+
+    // 2. Ensure all known contacts from agenda have an active thread
+    for (const [jid, contact] of knownContacts.entries()) {
+      if (jid && !jid.endsWith('@g.us') && jid !== 'status@broadcast') {
+        if (!chatThreads.has(jid)) {
+          chatThreads.set(jid, {
+            jid,
+            name: contact.name || `+${contact.phone}`,
+            lastMessage: 'Contato sincronizado da agenda',
+            lastTimestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+            unreadCount: 0,
+            messages: [],
+            botPausedForThisChat: false,
+          });
+        }
+      }
+    }
+  }
+
+  saveWhatsAppChats();
+  saveWhatsAppContacts();
+
+  let totalMsgs = 0;
+  for (const t of chatThreads.values()) {
+    totalMsgs += t.messages.length;
+  }
+
+  return {
+    activeChats: chatThreads.size,
+    totalContacts: knownContacts.size,
+    totalMessages: totalMsgs,
+    threads: Array.from(chatThreads.values()),
+  };
+}
+
 // Connect to WhatsApp using Baileys
 async function startWhatsApp() {
   if (sock) {
@@ -1066,12 +1318,14 @@ async function startWhatsApp() {
         const phone = contact.id.split('@')[0];
         const name = contact.name || contact.notify || contact.verifiedName || `+${phone}`;
         knownContacts.set(contact.id, { name, notify: contact.notify, phone });
-        
+
         const thread = chatThreads.get(contact.id);
         if (thread && (!thread.name || thread.name.startsWith('+'))) {
           thread.name = name;
         }
       }
+      saveWhatsAppContacts();
+      saveWhatsAppChats();
     });
 
     (sock.ev as any).on('contacts.set', ({ contacts }: { contacts: any[] }) => {
@@ -1082,6 +1336,23 @@ async function startWhatsApp() {
           const name = contact.name || contact.notify || contact.verifiedName || `+${phone}`;
           knownContacts.set(contact.id, { name, notify: contact.notify, phone });
         }
+        saveWhatsAppContacts();
+      }
+    });
+
+    (sock.ev as any).on('contacts.update', (updates: any[]) => {
+      if (Array.isArray(updates)) {
+        for (const u of updates) {
+          if (!u.id) continue;
+          const phone = u.id.split('@')[0];
+          const existing = knownContacts.get(u.id);
+          const name = u.name || u.notify || u.verifiedName || existing?.name || `+${phone}`;
+          knownContacts.set(u.id, { name, notify: u.notify || existing?.notify, phone });
+          const thread = chatThreads.get(u.id);
+          if (thread && name) thread.name = name;
+        }
+        saveWhatsAppContacts();
+        saveWhatsAppChats();
       }
     });
 
@@ -1102,12 +1373,18 @@ async function startWhatsApp() {
             messages: [],
             botPausedForThisChat: false,
           });
+        } else {
+          const thread = chatThreads.get(chat.id)!;
+          if (chat.name && (!thread.name || thread.name.startsWith('+'))) {
+            thread.name = chat.name;
+          }
         }
       }
+      saveWhatsAppChats();
     });
 
     sock.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
-      console.log(`📥 Histórico do WhatsApp sincronizado: ${chats?.length || 0} conversas, ${contacts?.length || 0} contatos, ${messages?.length || 0} mensagens.`);
+      console.log(`📥 Histórico completo do WhatsApp sincronizado: ${chats?.length || 0} conversas, ${contacts?.length || 0} contatos, ${messages?.length || 0} mensagens.`);
       if (contacts) {
         for (const c of contacts) {
           if (!c.id) continue;
@@ -1135,7 +1412,24 @@ async function startWhatsApp() {
           }
         }
       }
-      recordSystemLog('connection', 'Histórico Sincronizado', `${chats?.length || 0} conversas reais e contatos sincronizados com sucesso.`, undefined, 'success');
+      if (messages && Array.isArray(messages)) {
+        for (const msg of messages) {
+          try {
+            recordHistoricalMessage(msg);
+          } catch (mErr) {
+            console.warn('Erro ao processar mensagem do histórico:', mErr);
+          }
+        }
+      }
+      saveWhatsAppContacts();
+      saveWhatsAppChats();
+      recordSystemLog(
+        'connection',
+        'Histórico Sincronizado',
+        `${chats?.length || 0} conversas reais e ${messages?.length || 0} mensagens sincronizadas do WhatsApp.`,
+        undefined,
+        'success'
+      );
     });
 
     sock.ev.on('connection.update', async (update) => {
@@ -1206,18 +1500,36 @@ async function startWhatsApp() {
           waState.userPhone,
           'success'
         );
+
+        // Fetch groups and sync initial contacts on connect
+        syncRealWhatsAppContactsAndChats().catch((err) =>
+          console.warn('Sincronização inicial de grupos e contatos falhou:', err)
+        );
       }
     });
 
-    // Handle incoming messages
+    // Handle incoming messages (live vs historical)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       for (const msg of messages) {
         try {
-          await handleIncomingMessage(msg);
+          const msgTimestamp =
+            typeof msg.messageTimestamp === 'number'
+              ? msg.messageTimestamp * 1000
+              : msg.messageTimestamp && typeof (msg.messageTimestamp as any).low === 'number'
+              ? (msg.messageTimestamp as any).low * 1000
+              : Date.now();
+          const isOlder = Date.now() - msgTimestamp > 120000;
+
+          if (type === 'append' || isOlder) {
+            recordHistoricalMessage(msg);
+          } else {
+            await handleIncomingMessage(msg);
+          }
         } catch (err) {
           console.error('Erro ao processar mensagem recebida:', err);
         }
       }
+      saveWhatsAppChats();
     });
   } catch (err) {
     console.error('Falha crítica ao iniciar WhatsApp:', err);
@@ -1710,9 +2022,19 @@ app.get('/api/whatsapp/chats', (_req, res) => {
   const satisfactionRate =
     total > 0 ? Math.round((satisfiedCount / total) * 100) : 100;
 
+  const totalMessagesCount = threadsArray.reduce((acc, t) => acc + (t.messages?.length || 0), 0);
+
   res.json({
     threads: threadsArray,
-    stats: waState.stats,
+    stats: {
+      ...waState.stats,
+      activeChats: total,
+      totalContacts: knownContacts.size,
+      totalMessages: totalMessagesCount,
+    },
+    isWaConnected: waState.status === 'connected',
+    userPhone: waState.userPhone,
+    userName: waState.userName,
     autoReplyEnabled: waState.autoReplyEnabled,
     sentimentOverview: {
       total,
@@ -2797,55 +3119,89 @@ app.post('/api/reminders/trigger', async (req, res) => {
 // 17. SCRIPT & DOCUMENT IMPORT VIA GEMINI 3.8 FLASH
 app.post('/api/training/import-script', async (req, res) => {
   try {
-    const { scriptText, fileName } = req.body || {};
-    if (!scriptText || typeof scriptText !== 'string' || scriptText.trim().length < 10) {
-      res.status(400).json({ error: 'Conteúdo do script ou documento é obrigatório.' });
+    const { scriptText, fileName, fileBase64, mimeType } = req.body || {};
+
+    const hasText = typeof scriptText === 'string' && scriptText.trim().length > 10;
+    const isPdf = Boolean(
+      fileBase64 && (mimeType === 'application/pdf' || fileName?.toLowerCase().endsWith('.pdf'))
+    );
+
+    if (!hasText && !isPdf) {
+      res.status(400).json({ error: 'Envie um arquivo PDF, TXT ou digite o texto do documento.' });
       return;
     }
 
-    console.log(`🤖 Processando script comercial importado (${scriptText.length} caracteres, arquivo: ${fileName || 'texto'})...`);
+    console.log(
+      `🤖 Processando documento para treinamento com Gemini 3.8 Flash (Arquivo: ${fileName || 'texto'}, Tipo: ${
+        isPdf ? 'PDF Multimodal' : 'Texto'
+      })...`
+    );
 
-    const prompt = `Você é um especialista em automação e roteiros comerciais de vendas de alta conversão para WhatsApp (ArcoZapp).
-Analise o documento/script abaixo enviado pelo usuário e estruture as configurações de atendimento automatizado e humanizado da empresa.
+    const promptText = `Você é um especialista em engenharia de prompt para agentes autônomos de WhatsApp (ArcoZapp) e copywriting comercial de alta conversão.
+Analise o documento anexo (manual, script de vendas, cardápio, tabela de preços, procedimentos ou FAQ) e converta-o rigorosamente em uma configuração completa e estruturada para o prompt do sistema do bot.
 
-SCRIPT / DOCUMENTO ENVIADO:
-${scriptText.substring(0, 15000)}
-
-Gere um objeto JSON rigoroso com as instruções de atendimento no seguinte formato exato:
+Retorne EXCLUSIVAMENTE um objeto JSON válido (sem tags markdown, sem blocos code adicionais, somente o JSON) com os seguintes campos:
 {
-  "businessName": "<nome da empresa extraído ou inferido>",
-  "niche": "<segmento de atuação da empresa>",
-  "personaName": "<nome empático e acolhedor para o atendente virtual>",
-  "greeting": "<saudação inicial humanizada e calorosa pronta para WhatsApp>",
-  "knowledgeBase": "<base de conhecimento comercial completa estruturada em tópicos claros: SOBRE, PRODUTOS/SERVIÇOS, PREÇOS/VALORES, FORMAS DE PAGAMENTO, PRAZOS, DIFERENCIAIS e FAQ>",
+  "businessName": "<Nome da empresa ou marca extraído ou inferido>",
+  "niche": "<Nicho de atuação da empresa, ex: Gastronomia, Odontologia, Consultoria, Imobiliária, E-commerce>",
+  "personaName": "<Nome acolhedor e humanizado para o atendente virtual>",
+  "tone": "friendly",
+  "greeting": "<Mensagem de saudação acolhedora e calorosa pronta para WhatsApp com emojis moderados>",
+  "knowledgeBase": "<Base de conhecimento comercial completa dividida em seções claras: 1. SOBRE A EMPRESA | 2. PRODUTOS E SERVIÇOS | 3. TABELA DE PREÇOS E FORMAS DE PAGAMENTO (Pix, Cartão) | 4. PRAZOS E LOCALIZAÇÃO | 5. PERGUNTAS FREQUENTES (FAQ) com perguntas e respostas diretas>",
   "rules": [
-    "<regra 1 de postura comercial e acolhimento>",
-    "<regra 2 de quebra de objeções>",
-    "<regra 3 de clareza e parágrafos curtos>",
-    "<regra 4 de encaminhamento para pré-call ou fechamento>",
-    "<regra 5 de transparência sobre preços e condições>"
+    "<Regra 1: Postura acolhedora e resposta direta sem enrolação>",
+    "<Regra 2: Clareza e mensagens em parágrafos curtos adequados para leitura no celular>",
+    "<Regra 3: Tratamento de objeções comerciais e apresentação de valor>",
+    "<Regra 4: Direcionamento ativo para fechamento do pedido ou agendamento de pré-call>",
+    "<Regra 5: Transparência em valores e nunca inventar dados não contidos no documento>"
   ],
   "humanHandoffKeywords": [
     "falar com atendente",
     "humano",
     "gerente",
-    "falar com especialista"
+    "falar com pessoa",
+    "reclamação"
   ],
-  "summary": "<resumo executivo em 2 linhas de como o bot atenderá os clientes baseado no script>"
+  "quickReplies": [
+    "📦 Conhecer Produtos e Preços",
+    "💳 Formas de Pagamento e Pix",
+    "⏰ Horários e Atendimento",
+    "👨‍💼 Falar com Atendente Humano"
+  ],
+  "structuredSystemPrompt": "<Prompt do Sistema completo compilado e pronto para o modelo de IA, contendo Persona, Missão, Regras de Ouro, Tom de Voz, Base de Conhecimento e Instruções de Humanização>",
+  "summary": "<Resumo executivo de 2 a 3 linhas explicando o que a IA aprendeu com o documento e como ela atenderá os clientes>"
 }`;
+
+    const contents: any[] = [];
+    if (isPdf && fileBase64) {
+      const cleanBase64 = fileBase64.replace(/^data:application\/pdf;base64,/, '');
+      contents.push({
+        inlineData: {
+          mimeType: 'application/pdf',
+          data: cleanBase64,
+        },
+      });
+      contents.push({
+        text: `${promptText}\n\nArquivo analisado: ${fileName || 'Documento PDF'}`,
+      });
+    } else {
+      contents.push({
+        text: `${promptText}\n\nDOCUMENTO / SCRIPT ENVIADO:\n${(scriptText || '').substring(0, 20000)}`,
+      });
+    }
 
     const geminiRes = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
-      contents: prompt,
+      contents,
       config: {
         responseMimeType: 'application/json',
-        temperature: 0.3,
+        temperature: 0.2,
       },
     });
 
     const parsed = JSON.parse(geminiRes.text?.trim() || '{}');
-    if (!parsed.businessName || !parsed.knowledgeBase) {
-      throw new Error('Falha ao estruturar script.');
+    if (!parsed.businessName && !parsed.knowledgeBase) {
+      throw new Error('Falha ao estruturar o documento enviado.');
     }
 
     // Apply to bot training
@@ -2865,8 +3221,8 @@ Gere um objeto JSON rigoroso com as instruções de atendimento no seguinte form
 
     recordSystemLog(
       'system',
-      'Script Importado por IA',
-      `Documento "${fileName || 'Script Comercial'}" analisado com sucesso pelo Gemini 3.8 Flash. Base de conhecimento e regras de alta conversão geradas automaticamente.`,
+      'Documento Analisado por IA',
+      `Documento "${fileName || 'Documento Comercial'}" processado pelo Gemini 3.8 Flash. Base de conhecimento e prompt estruturado gerados com sucesso.`,
       'ArcoZapp IA',
       'success'
     );
@@ -2875,26 +3231,142 @@ Gere um objeto JSON rigoroso com as instruções de atendimento no seguinte form
       success: true,
       data: parsed,
       training: botTraining,
-      message: 'Script analisado e integrado com sucesso ao treinamento do bot!',
+      message: `Documento "${fileName || 'Arquivo'}" analisado com sucesso! Instruções estruturadas para o prompt geradas.`,
     });
   } catch (err: any) {
-    console.error('Erro na importação de script com Gemini:', err);
-    res.status(500).json({ error: `Erro ao analisar script com IA: ${err.message}` });
+    console.error('Erro na importação de documento com Gemini:', err);
+    res.status(500).json({ error: `Erro ao analisar documento com IA: ${err.message}` });
   }
 });
 
-// 18. FORCE RESYNC WHATSAPP CHATS
+// 18. FORCE RESYNC WHATSAPP CHATS & CONTACTS
 app.post('/api/whatsapp/sync-chats', async (_req, res) => {
   try {
-    const threadCount = chatThreads.size;
+    const isConnected = Boolean(sock && waState.status === 'connected');
+    const syncResult = await syncRealWhatsAppContactsAndChats();
+
     recordSystemLog(
       'connection',
       'Sincronização de Contatos',
-      `Sincronização solicitada. ${threadCount} conversas ativas no sistema.`,
+      isConnected
+        ? `Sincronização executada com sucesso. ${syncResult.activeChats} conversas, ${syncResult.totalContacts} contatos e ${syncResult.totalMessages} mensagens ativas.`
+        : `Sincronização com dados locais (${syncResult.activeChats} conversas salvas). Conecte o WhatsApp para sincronizar contatos em tempo real.`,
       'Operador',
-      'info'
+      isConnected ? 'success' : 'info'
     );
-    res.json({ success: true, activeChats: threadCount, threads: Array.from(chatThreads.values()) });
+
+    res.json({
+      success: true,
+      synced: true,
+      isConnected,
+      activeChats: syncResult.activeChats,
+      totalContacts: syncResult.totalContacts,
+      totalMessages: syncResult.totalMessages,
+      threads: syncResult.threads,
+      message: isConnected
+        ? `${syncResult.activeChats} conversas e ${syncResult.totalContacts} contatos reais sincronizados!`
+        : 'Sincronização realizada a partir dos dados locais salvos. Conecte o WhatsApp para sincronizar novos contatos do aparelho.',
+    });
+  } catch (err: any) {
+    console.error('Erro na sincronização de chats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 18.1 Start new chat with real phone number
+app.post('/api/whatsapp/chats/new', async (req, res) => {
+  try {
+    const { phone, name, initialMessage } = req.body || {};
+    if (!phone) {
+      res.status(400).json({ error: 'Número de telefone é obrigatório.' });
+      return;
+    }
+    const cleanPhone = phone.replace(/\D/g, '');
+    const jid = formatPhoneToJid(phone);
+    const contactName = name?.trim() || `+${cleanPhone}`;
+    const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+    let thread = chatThreads.get(jid);
+    if (!thread) {
+      thread = {
+        jid,
+        name: contactName,
+        lastMessage: initialMessage?.trim() || 'Conversa iniciada',
+        lastTimestamp: timestamp,
+        unreadCount: 0,
+        messages: [],
+        botPausedForThisChat: false,
+      };
+      chatThreads.set(jid, thread);
+    } else {
+      if (name?.trim()) thread.name = contactName;
+    }
+
+    knownContacts.set(jid, { name: contactName, phone: cleanPhone });
+
+    // Send initial message if provided and WhatsApp is connected
+    if (initialMessage && initialMessage.trim() && sock && waState.status === 'connected') {
+      try {
+        await sock.sendPresenceUpdate('composing', jid);
+        await new Promise((r) => setTimeout(r, 1000));
+        await sock.sendMessage(jid, { text: initialMessage.trim() });
+        await sock.sendPresenceUpdate('paused', jid);
+
+        thread.messages.push({
+          id: `msg-${Date.now()}`,
+          chatJid: jid,
+          senderName: 'Você',
+          fromMe: true,
+          text: initialMessage.trim(),
+          timestamp,
+        });
+        thread.lastMessage = initialMessage.trim();
+        thread.lastTimestamp = timestamp;
+      } catch (sendErr) {
+        console.warn('Erro ao disparar mensagem inicial para novo contato:', sendErr);
+      }
+    }
+
+    saveWhatsAppChats();
+    saveWhatsAppContacts();
+
+    recordSystemLog(
+      'connection',
+      'Novo Contato Adicionado',
+      `Conversa criada com ${contactName} (${cleanPhone}).`,
+      contactName,
+      'success'
+    );
+
+    res.json({ success: true, thread, message: 'Contato adicionado ao Monitor de Contatos!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 18.2 Get all real known contacts
+app.get('/api/whatsapp/contacts', (_req, res) => {
+  try {
+    const list = Array.from(knownContacts.entries()).map(([jid, c]) => ({
+      jid,
+      name: c.name || `+${c.phone}`,
+      notify: c.notify,
+      phone: c.phone,
+      hasThread: chatThreads.has(jid),
+    }));
+    res.json({ success: true, total: list.length, contacts: list });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 18.3 Delete or archive thread
+app.delete('/api/whatsapp/chats/:jid', (req, res) => {
+  try {
+    const { jid } = req.params;
+    const deleted = chatThreads.delete(jid);
+    saveWhatsAppChats();
+    res.json({ success: true, deleted, remainingCount: chatThreads.size });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

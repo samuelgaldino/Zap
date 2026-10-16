@@ -28,6 +28,13 @@ import {
   FileText,
   Upload,
   RefreshCw,
+  Copy,
+  CheckCircle2,
+  FileType,
+  FileCheck,
+  ArrowRight,
+  X,
+  FileCode,
 } from 'lucide-react';
 import { BotScheduleSettings } from './BotScheduleSettings';
 
@@ -52,6 +59,66 @@ interface TrainingStudioProps {
   onGoToInbox: () => void;
   onGoToSettings?: () => void;
 }
+
+const PRESET_TEMPLATES = [
+  {
+    id: 'consultoria',
+    label: 'Consultoria & Software B2B',
+    icon: '💼',
+    text: `EMPRESA: Nexus Tech Solutions
+NICHO: Consultoria Empresarial e Software em Nuvem
+SOBRE: Ajudamos empresas a automatizar processos e dobrar suas vendas através de inteligência artificial e CRM.
+PLANOS & PREÇOS:
+- Plano Starter: R$ 890,00/mês (até 3 atendentes)
+- Plano Pro: R$ 1.890,00/mês (até 10 atendentes + integrações completas)
+- Plano Enterprise: Sob consulta personalizada.
+FORMAS DE PAGAMENTO: Pix (5% de desconto à vista), Boleto Bancário ou Cartão de Crédito em até 12x.
+FAQ:
+- Vocês oferecem demonstração? Sim! Demonstração ao vivo de 15 minutos no Google Meet com nosso especialista.
+- Quanto tempo leva a implantação? Em menos de 48 horas sua operação já estará funcionando no WhatsApp.
+REGRAS:
+- Explicar o retorno sobre o investimento (ROI) antes de citar o valor final.
+- Sempre convidar para agendar uma demonstração rápida de 15 minutos sem compromisso.
+- Usar parágrafos curtos e tom consultivo e atencioso.`,
+  },
+  {
+    id: 'pizzaria',
+    label: 'Pizzaria & Delivery Artesanal',
+    icon: '🍕',
+    text: `EMPRESA: Fornalha D'Oro Pizzaria
+NICHO: Gastronomia Artesanal e Delivery Noturno
+HORÁRIO: De terça a domingo, das 18h às 23h30.
+CARDÁPIO (Tamanho Grande 8 fatias):
+- Calabresa Especial com Cebola Roxa: R$ 54,00
+- Quatro Queijos Nobres: R$ 62,00
+- Frango Desfiado com Catupiry Original: R$ 58,00
+- Margherita Clássica com Manjericão Fresco: R$ 56,00
+- Borda Recheada de Catupiry ou Cheddar: R$ 10,00 adicionais
+BEBIDAS: Coca-Cola 2L (R$ 14,00), Guaraná Antarctica 2L (R$ 12,00), Cerveja Heineken Long Neck (R$ 11,00).
+ENTREGA: Taxa fixa de R$ 7,00 para Centro e Jardins. Demais bairros sob consulta. Tempo médio: 35 a 45 min.
+PAGAMENTO: Pix na chave celular, Cartão de Crédito/Débito na entrega ou Dinheiro com troco.
+REGRAS:
+- Sempre perguntar se o cliente deseja borda recheada ou bebida gelada para acompanhar.
+- Confirmar o sabor, endereço completo e forma de pagamento antes de fechar o pedido.`,
+  },
+  {
+    id: 'clinica',
+    label: 'Clínica Odontológica & Estética',
+    icon: '🦷',
+    text: `EMPRESA: Clínica Dental Excellence
+NICHO: Odontologia Estética, Implantes e Ortodontia Digital
+HORÁRIO: Segunda a Sexta das 08h às 19h, Sábados das 08h às 13h.
+PROCEDIMENTOS:
+- Avaliação Odontológica Inicial com Câmera Intraoral: Gratuita no primeiro atendimento.
+- Clareamento Dental a Laser: A partir de R$ 650,00.
+- Implante Dentário Unitário: A partir de R$ 1.400,00 ou parcelado em até 12x no cartão.
+- Alinhadores Invisíveis e Ortodontia Digital: Planos mensais a partir de R$ 190,00.
+PAGAMENTO: Parcelamento em até 12x sem juros, Pix com 7% de desconto ou Carnê facilitado.
+REGRAS:
+- Nunca dar diagnóstico fechado pelo WhatsApp, sempre convidar para a avaliação presencial gratuita.
+- Tratar com máxima empatia, carinho e acolhimento para tranquilizar o paciente.`,
+  },
+];
 
 export const TrainingStudio: React.FC<TrainingStudioProps> = ({
   onGoToConnect,
@@ -80,11 +147,17 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
   const [newRule, setNewRule] = useState('');
   const [newKeyword, setNewKeyword] = useState('');
 
-  // Script import state
+  // Script & Document Upload State
   const [scriptPastedText, setScriptPastedText] = useState('');
   const [uploadedFileName, setUploadedFileName] = useState('');
+  const [uploadedFileSize, setUploadedFileSize] = useState('');
+  const [uploadedBase64, setUploadedBase64] = useState('');
+  const [fileMimeType, setFileMimeType] = useState('text/plain');
+  const [isDragOver, setIsDragOver] = useState(false);
   const [isAnalyzingScript, setIsAnalyzingScript] = useState(false);
   const [importResult, setImportResult] = useState<any | null>(null);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [previewTab, setPreviewTab] = useState<'prompt' | 'kb' | 'rules' | 'quickReplies'>('prompt');
 
   // Test prompt simulator state
   const [testQuestion, setTestQuestion] = useState('');
@@ -127,22 +200,63 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
     }
   };
 
+  const processSelectedFile = (file: File) => {
+    setUploadedFileName(file.name);
+    setUploadedFileSize((file.size / 1024).toFixed(1) + ' KB');
+
+    if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+      setFileMimeType('application/pdf');
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1] || '';
+        setUploadedBase64(base64);
+        setScriptPastedText(
+          `[Documento PDF Carregado: ${file.name} (${(file.size / 1024).toFixed(1)} KB)]\n` +
+          `O Gemini 3.8 Flash analisará diretamente as páginas, tabelas e tópicos do PDF para compor o prompt estruturado.`
+        );
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setFileMimeType('text/plain');
+      setUploadedBase64('');
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const content = event.target?.result as string;
+        if (content) {
+          setScriptPastedText(content);
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadedFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (content) {
-        setScriptPastedText(content);
-      }
-    };
-    reader.readAsText(file);
+    if (file) {
+      processSelectedFile(file);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processSelectedFile(file);
+    }
+  };
+
+  const handleClearUploadedFile = () => {
+    setUploadedFileName('');
+    setUploadedFileSize('');
+    setUploadedBase64('');
+    setFileMimeType('text/plain');
+    setScriptPastedText('');
   };
 
   const handleProcessScript = async () => {
-    if (!scriptPastedText.trim() || isAnalyzingScript) return;
+    if ((!scriptPastedText.trim() && !uploadedBase64) || isAnalyzingScript) return;
     setIsAnalyzingScript(true);
     setImportResult(null);
 
@@ -152,7 +266,9 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scriptText: scriptPastedText,
-          fileName: uploadedFileName || 'Texto colado',
+          fileName: uploadedFileName || 'Documento Comercial',
+          fileBase64: uploadedBase64 || undefined,
+          mimeType: fileMimeType,
         }),
       });
 
@@ -166,14 +282,39 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
         setTimeout(() => setSaveSuccess(false), 4000);
       } else {
         const errData = await res.json();
-        alert(errData.error || 'Erro ao processar script.');
+        alert(errData.error || 'Erro ao processar documento.');
       }
     } catch (err) {
-      console.error('Falha ao importar script:', err);
-      alert('Erro na conexão ao analisar script.');
+      console.error('Falha ao importar documento:', err);
+      alert('Erro na conexão ao analisar documento com IA.');
     } finally {
       setIsAnalyzingScript(false);
     }
+  };
+
+  const handleCopyPrompt = () => {
+    const promptToCopy =
+      importResult?.structuredSystemPrompt ||
+      `[PROMPT DO SISTEMA / AGENTE ARCOZAPP]
+EMPRESA: ${training.businessName}
+NICHO: ${training.niche}
+ATENDENTE VIRTUAL: ${training.personaName}
+
+SAUDAÇÃO INICIAL:
+${training.greeting}
+
+BASE DE CONHECIMENTO:
+${training.knowledgeBase}
+
+REGRAS DE CONVERSÃO:
+${(training.rules || []).map((r, i) => `${i + 1}. ${r}`).join('\n')}
+
+PALAVRAS DE TRANSFERÊNCIA HUMANA:
+${(training.humanHandoffKeywords || []).join(', ')}`;
+
+    navigator.clipboard.writeText(promptToCopy);
+    setCopiedPrompt(true);
+    setTimeout(() => setCopiedPrompt(false), 3000);
   };
 
   const handleTestQuestion = async (customQ?: string) => {
@@ -252,12 +393,15 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
             <span className="text-[11px] font-bold text-[#c084fc] bg-[#1e153b] border border-[#7e22ce]/40 px-2 py-0.5 rounded-full uppercase">
               Zero Robô
             </span>
+            <span className="text-[11px] font-bold text-emerald-400 bg-[#07271e] border border-emerald-500/40 px-2.5 py-0.5 rounded-full">
+              Upload PDF/TXT com IA
+            </span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-            Ensine seu Bot a Agir e Conversar como uma Pessoa
+            Treinamento & Prompt Estruturado do Sistema
           </h1>
           <p className="text-xs text-[#94a3b8] mt-0.5 max-w-2xl">
-            A IA ouve áudios de voz, reage com emojis no momento certo (como 👍, ❤️, 🔥, 🙏) e conversa com simpatia natural sem parecer um robô tradicional.
+            Ensine seu bot enviando manuais, tabelas ou scripts em PDF/TXT. A IA do Gemini converte automaticamente todo o conteúdo em um prompt profissional de atendimento e vendas.
           </p>
         </div>
 
@@ -273,7 +417,7 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
         </div>
       </div>
 
-      {/* Sub Tabs: Treinamento vs Importar Script vs Horários de Pausa */}
+      {/* Sub Tabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-[#1a263d] pb-3">
         <button
           onClick={() => setActiveSubTab('content')}
@@ -284,7 +428,7 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
           }`}
         >
           <BookOpen className="w-4 h-4" />
-          <span>Base de Conhecimento & Treinamento</span>
+          <span>Base de Conhecimento & Regras</span>
         </button>
 
         <button
@@ -296,7 +440,7 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
           }`}
         >
           <FileUp className="w-4 h-4 text-emerald-400" />
-          <span>Importar Script / Documento</span>
+          <span>Upload de Documentos (PDF / TXT)</span>
           <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded font-mono">
             IA Gemini
           </span>
@@ -319,123 +463,377 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
         <BotScheduleSettings />
       ) : activeSubTab === 'importScript' ? (
         <div className="space-y-6">
-          <div className="bg-[#0e1628] rounded-2xl border border-[#1a263d] p-6 shadow-xl space-y-6">
-            <div>
-              <div className="flex items-center gap-2 text-xs font-mono text-emerald-400 uppercase tracking-wider mb-1">
-                <Sparkles className="w-4 h-4" />
-                <span>Síntese Automática com Gemini 3.8 Flash</span>
+          {/* Main Upload Box */}
+          <div className="bg-[#0e1628] rounded-3xl border border-[#1a263d] p-6 shadow-2xl space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#1a263d]">
+              <div>
+                <div className="flex items-center gap-2 text-xs font-mono text-emerald-400 uppercase tracking-wider mb-1">
+                  <Sparkles className="w-4 h-4" />
+                  <span>Síntese Multimodal com Gemini 3.8 Flash</span>
+                </div>
+                <h2 className="text-lg font-bold text-white">
+                  Upload de Documentos & Conversão Automática de Prompt
+                </h2>
+                <p className="text-xs text-[#94a3b8] mt-1 max-w-2xl">
+                  Faça o upload do seu <strong>PDF</strong> comercial, catálogo de produtos, tabela de preços, manual de atendimento ou arquivo <strong>TXT</strong>. A IA analisará todo o documento e montará as instruções estruturadas para o prompt do seu bot.
+                </p>
               </div>
-              <h2 className="text-lg font-bold text-white">
-                Envie seu Script Comercial ou Manual de Vendas
-              </h2>
-              <p className="text-xs text-[#94a3b8] mt-1 max-w-2xl">
-                Você não precisa digitar regra por regra! Envie seu PDF, DOCX, TXT ou cole o roteiro abaixo. A inteligência artificial extrairá a proposta de valor, regras de ouro, dúvidas frequentes e montará o prompt ideal para você.
-              </p>
+
+              {/* Sample Preset Buttons */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] text-[#64748b] font-medium hidden sm:inline">Exemplos:</span>
+                {PRESET_TEMPLATES.map((tmpl) => (
+                  <button
+                    key={tmpl.id}
+                    onClick={() => {
+                      setScriptPastedText(tmpl.text);
+                      setUploadedFileName(`Exemplo: ${tmpl.label}`);
+                      setUploadedFileSize('1.2 KB');
+                      setFileMimeType('text/plain');
+                      setUploadedBase64('');
+                    }}
+                    className="text-[11px] bg-[#070b14] hover:bg-[#131d33] text-slate-300 border border-[#1e293b] hover:border-blue-500/40 px-2.5 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                    title={`Carregar exemplo de ${tmpl.label}`}
+                  >
+                    <span>{tmpl.icon}</span>
+                    <span>{tmpl.label.split(' ')[0]}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {/* Upload Zone */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="border-2 border-dashed border-[#1e293b] hover:border-blue-500/50 rounded-xl p-6 text-center space-y-3 bg-[#070b14]/50 transition flex flex-col items-center justify-center">
-                <FileUp className="w-8 h-8 text-blue-400" />
-                <div>
-                  <div className="text-xs font-semibold text-white">
-                    {uploadedFileName ? uploadedFileName : 'Clique para selecionar arquivo de script'}
-                  </div>
-                  <div className="text-[11px] text-[#64748b] mt-0.5">
-                    Suporta .txt, .docx, .pdf, .md
-                  </div>
+            {/* Drag & Drop Upload Zone + Text Input */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+              {/* Left Dropzone */}
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragOver(true);
+                }}
+                onDragLeave={() => setIsDragOver(false)}
+                onDrop={handleDrop}
+                className={`lg:col-span-5 border-2 border-dashed rounded-2xl p-6 text-center space-y-4 transition flex flex-col items-center justify-center relative ${
+                  isDragOver
+                    ? 'border-blue-500 bg-blue-950/20 shadow-xl shadow-blue-500/10'
+                    : 'border-[#1e293b] hover:border-blue-500/50 bg-[#070b14]/60'
+                }`}
+              >
+                <div className="w-14 h-14 rounded-2xl bg-blue-600/15 text-blue-400 border border-blue-500/30 flex items-center justify-center shadow-lg">
+                  <FileUp className="w-7 h-7" />
                 </div>
-                <label className="bg-[#1e293b] hover:bg-[#334155] text-white text-xs font-semibold px-4 py-2 rounded-lg cursor-pointer transition">
-                  <span>Procurar Documento</span>
+
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-white">
+                    Arraste seu arquivo PDF ou TXT aqui
+                  </h4>
+                  <p className="text-xs text-[#94a3b8] max-w-xs mx-auto">
+                    Suporta arquivos <strong>.pdf</strong>, <strong>.txt</strong>, <strong>.docx</strong> e <strong>.md</strong> de até 20MB.
+                  </p>
+                </div>
+
+                <label className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-5 py-2.5 rounded-xl cursor-pointer transition shadow-md shadow-blue-600/25 flex items-center gap-2">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Selecionar Documento do Computador</span>
                   <input
                     type="file"
-                    accept=".txt,.md,.doc,.docx,.pdf"
+                    accept=".pdf,.txt,.md,.doc,.docx"
                     onChange={handleFileUpload}
                     className="hidden"
                   />
                 </label>
+
+                {/* Selected File Card */}
+                {uploadedFileName && (
+                  <div className="w-full bg-[#101b33] border border-blue-500/40 rounded-xl p-3 flex items-center justify-between text-left animate-fadeIn">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div
+                        className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 font-bold text-xs ${
+                          fileMimeType === 'application/pdf'
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                            : 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                        }`}
+                      >
+                        {fileMimeType === 'application/pdf' ? 'PDF' : 'TXT'}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-white truncate max-w-[200px]">
+                          {uploadedFileName}
+                        </div>
+                        <div className="text-[10px] text-[#94a3b8]">
+                          {uploadedFileSize} • Pronto para análise com IA
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleClearUploadedFile}
+                      className="text-[#64748b] hover:text-rose-400 p-1 transition cursor-pointer"
+                      title="Remover arquivo"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {/* Paste Text Area */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-slate-300">
-                  Ou cole o texto do roteiro / documento aqui:
-                </label>
+              {/* Right Text Preview Area */}
+              <div className="lg:col-span-7 flex flex-col space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <label className="font-semibold text-slate-300 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Conteúdo Extraído / Texto do Roteiro:</span>
+                  </label>
+                  <span className="text-[11px] text-[#64748b] font-mono">
+                    {scriptPastedText.length} caracteres
+                  </span>
+                </div>
+
                 <textarea
-                  rows={6}
-                  placeholder="Cole aqui seu script de vendas, perguntas frequentes, tabela de preços, regras de atendimento ou manual da empresa..."
+                  rows={8}
+                  placeholder="Você também pode colar diretamente o conteúdo do manual, script de vendas, perguntas frequentes ou tabela de preços aqui..."
                   value={scriptPastedText}
                   onChange={(e) => setScriptPastedText(e.target.value)}
-                  className="w-full bg-[#070b14] border border-[#1e293b] rounded-xl p-3.5 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500 font-sans"
+                  className="flex-1 w-full bg-[#070b14] border border-[#1e293b] rounded-2xl p-4 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500/80 font-mono leading-relaxed"
                 />
               </div>
             </div>
 
-            {/* Action Button */}
-            <div className="flex items-center justify-between border-t border-[#1a263d] pt-4">
-              <div className="text-xs text-[#64748b]">
-                {scriptPastedText.length > 0 && `${scriptPastedText.length} caracteres detectados`}
+            {/* Action Bar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-[#1a263d] pt-4">
+              <div className="text-xs text-[#94a3b8] flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                <span>
+                  O Gemini 3.8 Flash converterá o arquivo em instruções estruturadas de prompt para o bot.
+                </span>
               </div>
 
               <button
                 onClick={handleProcessScript}
-                disabled={!scriptPastedText.trim() || isAnalyzingScript}
-                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold text-xs sm:text-sm px-6 py-2.5 rounded-xl shadow-lg shadow-emerald-600/25 flex items-center gap-2 cursor-pointer transition"
+                disabled={(!scriptPastedText.trim() && !uploadedBase64) || isAnalyzingScript}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold text-xs sm:text-sm px-6 py-3 rounded-full shadow-lg shadow-emerald-600/30 flex items-center gap-2 cursor-pointer transition shrink-0"
               >
                 {isAnalyzingScript ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>IA Analisando Script & Montando Prompt...</span>
+                    <span>Analisando Documento & Estruturando Prompt...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4" />
-                    <span>Analisar com IA & Configurar Bot</span>
+                    <span>Analisar com IA & Estruturar Prompt</span>
+                    <ArrowRight className="w-4 h-4" />
                   </>
                 )}
               </button>
             </div>
 
-            {/* Result Preview Card */}
+            {/* Comprehensive Structured Prompt Results */}
             {importResult && (
-              <div className="bg-[#070b14] border border-emerald-500/40 rounded-xl p-5 space-y-4 animate-fadeIn">
-                <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
-                  <Check className="w-5 h-5 bg-emerald-500/20 rounded-full p-0.5" />
-                  <span>Script Comercial Integrado com Sucesso!</span>
+              <div className="bg-[#070b14] border border-emerald-500/40 rounded-3xl p-6 space-y-5 animate-fadeIn">
+                {/* Result Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#1a263d]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center font-bold">
+                      <Check className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                        <span>Documento Estruturado com Sucesso!</span>
+                        <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full uppercase">
+                          Pronto para Atendimento
+                        </span>
+                      </h3>
+                      <p className="text-xs text-[#94a3b8]">
+                        Instruções estruturadas para o prompt do sistema geradas e salvas no bot.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleCopyPrompt}
+                      className="bg-[#101b33] hover:bg-[#162547] text-blue-300 border border-blue-500/40 text-xs font-semibold px-3.5 py-1.5 rounded-full transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      {copiedPrompt ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedPrompt ? 'Prompt Copiado!' : 'Copiar Prompt'}</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-[#0e1628] p-3 rounded-lg border border-[#1a263d]">
-                  <div>
-                    <span className="text-[#64748b] block text-[10px] uppercase">Empresa:</span>
-                    <span className="font-semibold text-white">{importResult.businessName}</span>
+                {/* Metadata Pills */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="bg-[#0e1628] border border-[#1a263d] p-3 rounded-xl">
+                    <span className="text-[#64748b] block text-[10px] uppercase font-bold">Empresa</span>
+                    <span className="font-bold text-white text-sm">{importResult.businessName || 'Empresa'}</span>
                   </div>
-                  <div>
-                    <span className="text-[#64748b] block text-[10px] uppercase">Nicho:</span>
-                    <span className="font-semibold text-white">{importResult.niche}</span>
+                  <div className="bg-[#0e1628] border border-[#1a263d] p-3 rounded-xl">
+                    <span className="text-[#64748b] block text-[10px] uppercase font-bold">Nicho de Atuação</span>
+                    <span className="font-bold text-blue-300 text-sm">{importResult.niche || 'Geral'}</span>
                   </div>
-                  <div>
-                    <span className="text-[#64748b] block text-[10px] uppercase">Atendente:</span>
-                    <span className="font-semibold text-white">{importResult.personaName}</span>
+                  <div className="bg-[#0e1628] border border-[#1a263d] p-3 rounded-xl">
+                    <span className="text-[#64748b] block text-[10px] uppercase font-bold">Atendente Virtual</span>
+                    <span className="font-bold text-emerald-300 text-sm">{importResult.personaName || 'Assistente'}</span>
+                  </div>
+                  <div className="bg-[#0e1628] border border-[#1a263d] p-3 rounded-xl">
+                    <span className="text-[#64748b] block text-[10px] uppercase font-bold">Regras Convertidas</span>
+                    <span className="font-bold text-[#c084fc] text-sm">
+                      {Array.isArray(importResult.rules) ? importResult.rules.length : 5} Regras
+                    </span>
                   </div>
                 </div>
 
+                {/* Executive Summary */}
                 {importResult.summary && (
-                  <p className="text-xs text-[#94a3b8] italic bg-[#0e1628] p-3 rounded-lg border border-[#1a263d]">
-                    "{importResult.summary}"
-                  </p>
+                  <div className="bg-[#0e1628] border border-[#1a263d] p-3.5 rounded-2xl text-xs text-slate-300 italic flex items-start gap-2.5">
+                    <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <span>"{importResult.summary}"</span>
+                  </div>
                 )}
 
-                <div className="flex items-center justify-between pt-2">
+                {/* Preview Tabs */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 border-b border-[#1a263d] pb-2">
+                    <button
+                      onClick={() => setPreviewTab('prompt')}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                        previewTab === 'prompt'
+                          ? 'bg-blue-600 text-white'
+                          : 'text-[#94a3b8] hover:text-white hover:bg-[#131d33]'
+                      }`}
+                    >
+                      <FileCode className="w-3.5 h-3.5" />
+                      <span>Prompt Estruturado do Sistema</span>
+                    </button>
+                    <button
+                      onClick={() => setPreviewTab('kb')}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                        previewTab === 'kb'
+                          ? 'bg-blue-600 text-white'
+                          : 'text-[#94a3b8] hover:text-white hover:bg-[#131d33]'
+                      }`}
+                    >
+                      <BookOpen className="w-3.5 h-3.5" />
+                      <span>Base de Conhecimento</span>
+                    </button>
+                    <button
+                      onClick={() => setPreviewTab('rules')}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                        previewTab === 'rules'
+                          ? 'bg-blue-600 text-white'
+                          : 'text-[#94a3b8] hover:text-white hover:bg-[#131d33]'
+                      }`}
+                    >
+                      <Sliders className="w-3.5 h-3.5" />
+                      <span>Regras Comerciais ({importResult.rules?.length || 0})</span>
+                    </button>
+                    <button
+                      onClick={() => setPreviewTab('quickReplies')}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                        previewTab === 'quickReplies'
+                          ? 'bg-blue-600 text-white'
+                          : 'text-[#94a3b8] hover:text-white hover:bg-[#131d33]'
+                      }`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>Respostas Rápidas</span>
+                    </button>
+                  </div>
+
+                  {/* Tab 1: Prompt Estruturado */}
+                  {previewTab === 'prompt' && (
+                    <div className="bg-[#0b1220] border border-[#1e293b] rounded-2xl p-4 font-mono text-xs text-slate-200 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] text-[#64748b] border-b border-[#1e293b] pb-2">
+                        <span>INSTRUÇÃO COMPLETA DO SISTEMA (SYSTEM PROMPT)</span>
+                        <span>Pronto para o modelo Gemini 3.8 Flash</span>
+                      </div>
+                      <pre className="whitespace-pre-wrap leading-relaxed text-[#e2e8f0] max-h-[300px] overflow-y-auto">
+                        {importResult.structuredSystemPrompt ||
+                          `[INSTRUÇÕES DO SISTEMA - ARCOZAPP]
+VOCÊ É: ${importResult.personaName || 'Assistente'}, atendente virtual inteligente da empresa "${importResult.businessName}".
+NICHO: ${importResult.niche}.
+
+MISSÃO COMERCIAL:
+Prestar um atendimento ultra-humanizado, acolhedor e esclarecedor pelo WhatsApp, convertendo dúvidas em vendas, orçamentos fechados ou reuniões de pré-call.
+
+SAUDAÇÃO INICIAL:
+${importResult.greeting}
+
+BASE DE CONHECIMENTO COMPILADA:
+${importResult.knowledgeBase}
+
+DIRETRIZES E REGRAS DE CONVERSÃO:
+${(importResult.rules || []).map((r: string, i: number) => `[${i + 1}] ${r}`).join('\n')}
+
+TRANSFERÊNCIA HUMANA:
+Palavras de gatilho para transição humana: ${(importResult.humanHandoffKeywords || []).join(', ')}.`}
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* Tab 2: Base de Conhecimento */}
+                  {previewTab === 'kb' && (
+                    <div className="bg-[#0b1220] border border-[#1e293b] rounded-2xl p-4 text-xs space-y-2">
+                      <div className="text-[11px] font-bold text-blue-400 uppercase">
+                        Base de Conhecimento Estruturada
+                      </div>
+                      <pre className="whitespace-pre-wrap font-sans text-slate-300 leading-relaxed max-h-[300px] overflow-y-auto">
+                        {importResult.knowledgeBase}
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* Tab 3: Regras Comerciais */}
+                  {previewTab === 'rules' && (
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                      {(importResult.rules || []).map((rule: string, idx: number) => (
+                        <div
+                          key={idx}
+                          className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-3 text-xs text-slate-200 flex items-start gap-2.5"
+                        >
+                          <span className="w-5 h-5 rounded-md bg-blue-600/20 text-blue-400 font-bold text-[10px] flex items-center justify-center shrink-0 border border-blue-500/30">
+                            {idx + 1}
+                          </span>
+                          <span className="leading-relaxed">{rule}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Tab 4: Respostas Rápidas */}
+                  {previewTab === 'quickReplies' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {(importResult.quickReplies || [
+                        '📦 Conhecer Produtos e Preços',
+                        '💳 Formas de Pagamento e Pix',
+                        '⏰ Horários de Atendimento',
+                        '👨‍💼 Falar com Atendente Humano',
+                      ]).map((reply: string, idx: number) => (
+                        <div
+                          key={idx}
+                          className="bg-[#0b1220] border border-blue-500/30 rounded-xl p-3 text-xs text-white font-medium flex items-center gap-2"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                          <span>{reply}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Bottom Footer Actions */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-[#1a263d]">
                   <span className="text-xs text-[#94a3b8]">
-                    As regras e base de conhecimento já foram salvas no ArcoZapp.
+                    Deseja testar as respostas deste prompt estruturado em tempo real?
                   </span>
-                  <button
-                    onClick={() => setActiveSubTab('content')}
-                    className="text-xs font-bold text-blue-400 hover:text-blue-300 transition flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>Ver Base de Conhecimento Gerada</span>
-                    <span>→</span>
-                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setActiveSubTab('content')}
+                      className="text-xs font-bold text-blue-400 hover:text-blue-300 transition flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Editar Parâmetros Manuais</span>
+                      <span>→</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -452,276 +850,270 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
 
           {/* Humanization Highlights Card */}
           <div className="bg-[#0e1628] rounded-2xl border border-[#1a263d] p-5 shadow-xl">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-blue-400" />
-              <h3 className="text-sm sm:text-base font-bold text-white">
-                Tecnologias de Humanização Multimodal Ativas no WhatsApp
-              </h3>
-            </div>
-            <p className="text-xs text-[#94a3b8] mt-0.5">
-              Transforme o atendimento em uma conversa viva, calorosa e contextual.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-          {/* Audio Listening */}
-          <div className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-4 flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl bg-blue-600/20 border border-blue-500/40 text-blue-400 flex items-center justify-center shrink-0">
-              <Headphones className="w-5 h-5" />
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-xs text-white">1. Ouvir Áudios de Voz</span>
-                <input
-                  type="checkbox"
-                  checked={training.enableAudioListening ?? true}
-                  onChange={(e) =>
-                    setTraining({ ...training, enableAudioListening: e.target.checked })
-                  }
-                  className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
-                />
-              </div>
-              <p className="text-[11px] text-[#94a3b8] mt-1 leading-relaxed">
-                Quando o cliente mandar áudio no WhatsApp, a IA escuta, transcreve e compreende a intenção do cliente instantaneamente!
-              </p>
-            </div>
-          </div>
-
-          {/* Context Reactions */}
-          <div className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-4 flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl bg-purple-600/20 border border-purple-500/40 text-purple-400 flex items-center justify-center shrink-0">
-              <ThumbsUp className="w-5 h-5" />
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-xs text-white">2. Reações com Emojis</span>
-                <input
-                  type="checkbox"
-                  checked={training.enableContextReactions ?? true}
-                  onChange={(e) =>
-                    setTraining({ ...training, enableContextReactions: e.target.checked })
-                  }
-                  className="w-4 h-4 accent-purple-600 rounded cursor-pointer"
-                />
-              </div>
-              <p className="text-[11px] text-[#94a3b8] mt-1 leading-relaxed">
-                Reage à mensagem do cliente: ❤️ para gentileza/Pix, 👍 para confirmação, 🔥 para pedidos fechados, 🙏 para agradecimentos.
-              </p>
-            </div>
-          </div>
-
-          {/* Natural Emojis */}
-          <div className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-4 flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-[#34d399] flex items-center justify-center shrink-0">
-              <Smile className="w-5 h-5" />
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-xs text-white">3. Emojis Expressivos</span>
-                <input
-                  type="checkbox"
-                  checked={training.humanizedEmojis ?? true}
-                  onChange={(e) =>
-                    setTraining({ ...training, humanizedEmojis: e.target.checked })
-                  }
-                  className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
-                />
-              </div>
-              <p className="text-[11px] text-[#94a3b8] mt-1 leading-relaxed">
-                Usa emojis calorosos e naturais do dia a dia brasileiro (😉, ✨, 👏, 😊) de forma espontânea, sem mensagens engessadas.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Business & Behavior Settings */}
-        <div className="lg:col-span-5 space-y-6">
-          {/* Identity card */}
-          <div className="bg-[#0e1628] border border-[#1a263d] rounded-2xl p-5 shadow-xl">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2 mb-4 pb-3 border-b border-[#1a263d]">
-              <Building className="w-4 h-4 text-blue-400" />
-              Identidade do Atendimento
-            </h3>
-
-            <div className="space-y-4 text-xs">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
               <div>
-                <label className="block text-xs font-semibold text-white mb-1">
-                  Nome do Negócio / Empresa:
-                </label>
-                <input
-                  type="text"
-                  value={training.businessName}
-                  onChange={(e) => setTraining({ ...training, businessName: e.target.value })}
-                  placeholder="Ex: Minha Empresa"
-                  className="w-full bg-[#0b1220] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 placeholder-[#64748b]"
-                />
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-blue-400" />
+                  <h3 className="text-sm sm:text-base font-bold text-white">
+                    Tecnologias de Humanização Multimodal Ativas no WhatsApp
+                  </h3>
+                </div>
+                <p className="text-xs text-[#94a3b8] mt-0.5">
+                  Transforme o atendimento em uma conversa viva, calorosa e contextual.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              {/* Audio Listening */}
+              <div className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-4 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-blue-600/20 border border-blue-500/40 text-blue-400 flex items-center justify-center shrink-0">
+                  <Headphones className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-white">1. Ouvir Áudios de Voz</span>
+                    <input
+                      type="checkbox"
+                      checked={training.enableAudioListening ?? true}
+                      onChange={(e) =>
+                        setTraining({ ...training, enableAudioListening: e.target.checked })
+                      }
+                      className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
+                    />
+                  </div>
+                  <p className="text-[11px] text-[#94a3b8] mt-1 leading-relaxed">
+                    Quando o cliente mandar áudio no WhatsApp, a IA escuta, transcreve e compreende a intenção do cliente instantaneamente!
+                  </p>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-white mb-1">
-                  Ramo / Nicho:
-                </label>
-                <input
-                  type="text"
-                  value={training.niche}
-                  onChange={(e) => setTraining({ ...training, niche: e.target.value })}
-                  placeholder="Ex: Consultoria, Loja Virtual, Salão, Restaurante"
-                  className="w-full bg-[#0b1220] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 placeholder-[#64748b]"
-                />
+              {/* Context Reactions */}
+              <div className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-4 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-purple-600/20 border border-purple-500/40 text-purple-400 flex items-center justify-center shrink-0">
+                  <ThumbsUp className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-white">2. Reações com Emojis</span>
+                    <input
+                      type="checkbox"
+                      checked={training.enableContextReactions ?? true}
+                      onChange={(e) =>
+                        setTraining({ ...training, enableContextReactions: e.target.checked })
+                      }
+                      className="w-4 h-4 accent-purple-600 rounded cursor-pointer"
+                    />
+                  </div>
+                  <p className="text-[11px] text-[#94a3b8] mt-1 leading-relaxed">
+                    Reage automaticamente com 👍, ❤️, 🔥 ou 🙏 quando o cliente confirma o pedido, envia o comprovante Pix ou agradece.
+                  </p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* Real Humanized Tone */}
+              <div className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-4 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+                  <Smile className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-white">3. Empatia & Zero Robô</span>
+                    <input
+                      type="checkbox"
+                      checked={training.humanizedEmojis ?? true}
+                      onChange={(e) =>
+                        setTraining({ ...training, humanizedEmojis: e.target.checked })
+                      }
+                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                    />
+                  </div>
+                  <p className="text-[11px] text-[#94a3b8] mt-1 leading-relaxed">
+                    Respostas em parágrafos curtos e calorosos, com pausas simuladas para dar a impressão de digitação real.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Form Fields: Business Info & Persona */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Identity Card */}
+            <div className="bg-[#0e1628] rounded-2xl border border-[#1a263d] p-5 shadow-xl space-y-4">
+              <div className="flex items-center gap-2 pb-3 border-b border-[#1a263d]">
+                <Building className="w-4 h-4 text-blue-400" />
+                <h3 className="font-bold text-xs sm:text-sm text-white">
+                  Identidade do Negócio & Persona
+                </h3>
+              </div>
+
+              <div className="space-y-3">
                 <div>
-                  <label className="block text-xs font-semibold text-white mb-1">
-                    Nome do Atendente:
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Nome da Empresa
+                  </label>
+                  <input
+                    type="text"
+                    value={training.businessName}
+                    onChange={(e) => setTraining({ ...training, businessName: e.target.value })}
+                    placeholder="Ex: Bella Forneria Pizzaria"
+                    className="w-full bg-[#070b14] border border-[#1e293b] rounded-xl px-3.5 py-2 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Nicho / Ramo de Atuação
+                  </label>
+                  <input
+                    type="text"
+                    value={training.niche}
+                    onChange={(e) => setTraining({ ...training, niche: e.target.value })}
+                    placeholder="Ex: Pizzaria Artesanal & Delivery"
+                    className="w-full bg-[#070b14] border border-[#1e293b] rounded-xl px-3.5 py-2 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Nome do Atendente Virtual
                   </label>
                   <input
                     type="text"
                     value={training.personaName}
                     onChange={(e) => setTraining({ ...training, personaName: e.target.value })}
-                    placeholder="Ex: Sofia, Lucas, Bia"
-                    className="w-full bg-[#0b1220] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 placeholder-[#64748b]"
+                    placeholder="Ex: Bella (Atendente Virtual)"
+                    className="w-full bg-[#070b14] border border-[#1e293b] rounded-xl px-3.5 py-2 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-white mb-1">
-                    Tom de Voz:
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Saudação Inicial no WhatsApp
                   </label>
-                  <select
-                    value={training.tone}
-                    onChange={(e) => setTraining({ ...training, tone: e.target.value })}
-                    className="w-full bg-[#0b1220] border border-[#1e293b] text-white rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-blue-500 cursor-pointer"
-                  >
-                    <option value="friendly">Amigável & Simpático</option>
-                    <option value="formal">Formal & Corporativo</option>
-                    <option value="sales">Focado em Vendas</option>
-                    <option value="concise">Objetivo & Rápido</option>
-                  </select>
+                  <textarea
+                    rows={3}
+                    value={training.greeting}
+                    onChange={(e) => setTraining({ ...training, greeting: e.target.value })}
+                    placeholder="Olá! Seja bem-vindo(a). Como posso te ajudar hoje? 😊"
+                    className="w-full bg-[#070b14] border border-[#1e293b] rounded-xl p-3 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500 font-sans"
+                  />
                 </div>
+              </div>
+            </div>
+
+            {/* Knowledge Base Card */}
+            <div className="bg-[#0e1628] rounded-2xl border border-[#1a263d] p-5 shadow-xl space-y-4 flex flex-col">
+              <div className="flex items-center justify-between pb-3 border-b border-[#1a263d]">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-emerald-400" />
+                  <h3 className="font-bold text-xs sm:text-sm text-white">
+                    Base de Conhecimento Comercial
+                  </h3>
+                </div>
+                <span className="text-[10px] text-[#64748b] font-mono">
+                  {training.knowledgeBase.length} caracteres
+                </span>
+              </div>
+
+              <div className="flex-1 space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Preços, cardápio, produtos, prazos e perguntas frequentes:
+                </label>
+                <textarea
+                  rows={10}
+                  value={training.knowledgeBase}
+                  onChange={(e) => setTraining({ ...training, knowledgeBase: e.target.value })}
+                  placeholder="Descreva detalhadamente seus produtos, tabela de preços, forma de pagamento Pix, horário de funcionamento, prazos de entrega e dúvidas frequentes..."
+                  className="w-full h-[calc(100%-25px)] bg-[#070b14] border border-[#1e293b] rounded-xl p-3.5 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500 font-mono leading-relaxed"
+                />
               </div>
             </div>
           </div>
 
-          {/* Strict Rules */}
-          <div className="bg-[#0e1628] border border-[#1a263d] rounded-2xl p-5 shadow-xl">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2 mb-2 pb-3 border-b border-[#1a263d]">
-              <ShieldAlert className="w-4 h-4 text-rose-400" />
-              Regras Humanizadas & Condutas
-            </h3>
-            <p className="text-xs text-[#94a3b8] mb-3">
-              Instruções de como agir, responder e o que NUNCA fazer no WhatsApp:
-            </p>
+          {/* Rules and Human Handoff */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Rules */}
+            <div className="bg-[#0e1628] rounded-2xl border border-[#1a263d] p-5 shadow-xl space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-[#1a263d]">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-amber-400" />
+                  <h3 className="font-bold text-xs sm:text-sm text-white">
+                    Regras de Ouro do Atendimento
+                  </h3>
+                </div>
+                <span className="text-[10px] text-[#64748b] font-mono">
+                  {training.rules?.length || 0} regras ativas
+                </span>
+              </div>
 
-            <div className="space-y-2 mb-3">
-              {(training.rules || []).map((rule, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-start justify-between gap-2 bg-[#0b1220] p-2.5 rounded-xl border border-[#1e293b] text-xs text-slate-200"
+              <div className="space-y-2 max-h-56 overflow-y-auto">
+                {training.rules?.map((rule, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between gap-2 bg-[#070b14] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-slate-200"
+                  >
+                    <span className="flex-1 leading-relaxed">
+                      <strong className="text-blue-400 mr-1.5">{idx + 1}.</strong>
+                      {rule}
+                    </span>
+                    <button
+                      onClick={() => handleRemoveRule(idx)}
+                      className="text-[#64748b] hover:text-rose-400 p-1 transition cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <input
+                  type="text"
+                  value={newRule}
+                  onChange={(e) => setNewRule(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddRule()}
+                  placeholder="Adicionar nova regra de atendimento..."
+                  className="flex-1 bg-[#070b14] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500"
+                />
+                <button
+                  onClick={handleAddRule}
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1 cursor-pointer"
                 >
-                  <span>
-                    <strong className="text-blue-400">•</strong> {rule}
-                  </span>
-                  <button
-                    onClick={() => handleRemoveRule(idx)}
-                    className="text-[#64748b] hover:text-rose-400 transition shrink-0 cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Adicionar</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Human Handoff */}
+            <div className="bg-[#0e1628] rounded-2xl border border-[#1a263d] p-5 shadow-xl space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-[#1a263d]">
+                <div className="flex items-center gap-2">
+                  <User className="w-4 h-4 text-purple-400" />
+                  <h3 className="font-bold text-xs sm:text-sm text-white">
+                    Palavras de Transição Humana
+                  </h3>
                 </div>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={newRule}
-                onChange={(e) => setNewRule(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddRule())}
-                placeholder="Ex: Seja muito acolhedor, use emojis e chame o cliente pelo nome..."
-                className="flex-1 bg-[#0b1220] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 placeholder-[#64748b]"
-              />
-              <button
-                type="button"
-                onClick={handleAddRule}
-                className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1 transition cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" /> Adicionar
-              </button>
-            </div>
-          </div>
-
-          {/* Autonomous WhatsApp Settings */}
-          <div className="bg-[#0e1628] border border-[#1a263d] rounded-2xl p-5 shadow-xl space-y-4">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2 pb-3 border-b border-[#1a263d]">
-              <Sliders className="w-4 h-4 text-purple-400" />
-              Pausas Humanizadas & Transbordo
-            </h3>
-
-            {/* Delay slider */}
-            <div>
-              <div className="flex items-center justify-between text-xs font-semibold text-white mb-1">
-                <span>Tempo de Digitação Humana no WhatsApp:</span>
-                <span className="text-blue-400 font-mono font-bold">{training.simulatedTypingDelay || 3} segundos</span>
-              </div>
-              <input
-                type="range"
-                min="1"
-                max="5"
-                step="1"
-                value={training.simulatedTypingDelay || 3}
-                onChange={(e) =>
-                  setTraining({ ...training, simulatedTypingDelay: Number(e.target.value) })
-                }
-                className="w-full accent-blue-600 cursor-pointer"
-              />
-              <span className="text-[11px] text-[#64748b] block mt-0.5">
-                O cliente verá o status "digitando..." durante este tempo para parecer 100% natural.
-              </span>
-            </div>
-
-            {/* Ignore groups toggle */}
-            <div className="flex items-center justify-between pt-2">
-              <div>
-                <span className="text-xs font-semibold text-white block">
-                  Responder Apenas Mensagens Privadas
-                </span>
-                <span className="text-[11px] text-[#64748b] block">
-                  Ignora grupos do WhatsApp para evitar spam.
+                <span className="text-[10px] text-[#64748b] font-mono">
+                  {training.humanHandoffKeywords?.length || 0} gatilhos
                 </span>
               </div>
-              <input
-                type="checkbox"
-                checked={training.autoReplyOnlyPrivate}
-                onChange={(e) =>
-                  setTraining({ ...training, autoReplyOnlyPrivate: e.target.checked })
-                }
-                className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
-              />
-            </div>
 
-            {/* Human handoff keywords */}
-            <div className="pt-2 border-t border-[#1a263d]">
-              <span className="text-xs font-semibold text-white block mb-1">
-                Palavras que Pausam o Bot para Você Assumir:
-              </span>
-              <div className="flex flex-wrap gap-1.5 mb-2">
-                {(training.humanHandoffKeywords || []).map((kw, idx) => (
+              <p className="text-xs text-[#94a3b8]">
+                Se o cliente enviar qualquer uma dessas palavras no WhatsApp, o bot pausa automaticamente e transfere para você:
+              </p>
+
+              <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
+                {training.humanHandoffKeywords?.map((kw, idx) => (
                   <span
                     key={idx}
-                    className="inline-flex items-center gap-1 text-xs bg-[#1f1322] border border-[#831843]/50 text-[#f472b6] px-2.5 py-0.5 rounded-full"
+                    className="inline-flex items-center gap-1.5 bg-[#101b33] border border-blue-500/40 text-blue-200 text-xs px-2.5 py-1 rounded-full font-mono"
                   >
                     <span>{kw}</span>
                     <button
-                      type="button"
                       onClick={() => handleRemoveKeyword(idx)}
-                      className="text-[#f472b6] hover:text-white transition cursor-pointer"
+                      className="text-blue-400 hover:text-rose-400 transition cursor-pointer"
                     >
                       ×
                     </button>
@@ -729,123 +1121,56 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
                 ))}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 pt-2">
                 <input
                   type="text"
                   value={newKeyword}
                   onChange={(e) => setNewKeyword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddKeyword())}
-                  placeholder="Ex: falar com você, gerente..."
-                  className="flex-1 bg-[#0b1220] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 placeholder-[#64748b]"
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddKeyword()}
+                  placeholder="Ex: falar com dono, cancelar pedido..."
+                  className="flex-1 bg-[#070b14] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500"
                 />
                 <button
-                  type="button"
                   onClick={handleAddKeyword}
-                  className="bg-[#1f1322] hover:bg-[#2d1b32] text-[#f472b6] border border-[#831843]/60 text-xs font-semibold px-3 py-2 rounded-xl transition cursor-pointer"
+                  className="bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1 cursor-pointer"
                 >
-                  + Incluir
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Adicionar</span>
                 </button>
-              </div>
-            </div>
-
-            {/* Business Hours & Pause schedule card */}
-            <div className="pt-3 border-t border-[#1a263d]">
-              <div className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center shrink-0">
-                    <Clock className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-white block">
-                      Horário Comercial & Pausas
-                    </span>
-                    <span className="text-[10px] text-[#64748b] block">
-                      Descanso da IA fora do expediente
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveSubTab('schedule')}
-                  className="text-xs bg-[#17233d] hover:bg-blue-600 text-blue-300 hover:text-white px-2.5 py-1.5 rounded-lg border border-[#223558] transition cursor-pointer font-semibold shrink-0"
-                >
-                  Configurar →
-                </button>
-              </div>
-            </div>
-
-            {/* System Logs Quick Access Card */}
-            <div className="pt-2">
-              <div className="bg-[#0b1220] border border-[#1e293b] rounded-xl p-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
-                    <Activity className="w-4 h-4 animate-pulse" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-white block">
-                      Logs do Sistema (Ao Vivo)
-                    </span>
-                    <span className="text-[10px] text-[#64748b] block">
-                      Últimas 50 ações executadas pelo bot
-                    </span>
-                  </div>
-                </div>
-                {onGoToSettings && (
-                  <button
-                    type="button"
-                    onClick={onGoToSettings}
-                    className="text-xs bg-[#0f241d] hover:bg-[#163629] text-emerald-300 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg transition cursor-pointer font-semibold shrink-0"
-                  >
-                    Ver Logs →
-                  </button>
-                )}
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Right Column: Knowledge Base & Sandbox Testing */}
-        <div className="lg:col-span-7 space-y-6">
-          {/* Knowledge Base Editor */}
-          <div className="bg-[#0e1628] border border-[#1a263d] rounded-2xl p-5 shadow-xl flex flex-col">
-            <div className="flex items-center justify-between pb-3 border-b border-[#1a263d] mb-3">
-              <div>
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 text-blue-400" />
-                  Base de Conhecimento (Tudo o que seu bot sabe)
+          {/* Test Simulator in Live Mode */}
+          <div className="bg-[#0e1628] rounded-2xl border border-[#1a263d] p-5 shadow-xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1a263d]">
+              <div className="flex items-center gap-2">
+                <Bot className="w-4 h-4 text-emerald-400" />
+                <h3 className="font-bold text-xs sm:text-sm text-white">
+                  Simulador de Conversa com IA em Tempo Real
                 </h3>
-                <p className="text-xs text-[#94a3b8] mt-0.5">
-                  Insira o cardápio, tabela de preços, serviços, horários, endereço, formas de pagamento e perguntas frequentes.
-                </p>
               </div>
-              <span className="text-[11px] bg-[#0b1220] border border-[#1e293b] text-[#94a3b8] px-2.5 py-1 rounded-full font-mono">
-                {training.knowledgeBase?.length || 0} caracteres
+              <span className="text-[10px] text-emerald-400 bg-emerald-950/40 border border-emerald-500/40 px-2.5 py-0.5 rounded-full font-bold">
+                Gemini 3.8 Flash Ativo
               </span>
             </div>
 
-            <textarea
-              rows={14}
-              value={training.knowledgeBase}
-              onChange={(e) => setTraining({ ...training, knowledgeBase: e.target.value })}
-              placeholder="Digite todas as informações do seu negócio aqui..."
-              className="w-full bg-[#0b1220] border border-[#1e293b] rounded-xl p-4 text-xs font-mono leading-relaxed text-slate-100 focus:outline-none focus:border-blue-500/80 focus:ring-1 focus:ring-blue-500/30 resize-y placeholder-[#64748b]"
-            />
-          </div>
-
-          {/* Training Test Sandbox with Reactions & Audio preview */}
-          <div className="bg-[#0e1628] border border-[#1a263d] rounded-2xl p-5 shadow-xl">
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="w-4 h-4 text-blue-400" />
-              <h3 className="font-bold text-sm sm:text-base text-white">
-                Simulador de Teste: Veja as Reações com Emojis e a Resposta
-              </h3>
-            </div>
-            <p className="text-xs text-[#94a3b8] mb-3">
-              Clique em um dos exemplos rápidos abaixo ou digite qualquer mensagem para ver como a IA reage e responde:
+            <p className="text-xs text-[#94a3b8]">
+              Faça perguntas de teste como se fosse um cliente para verificar como a IA reage, responde com empatia e utiliza a base de conhecimento:
             </p>
 
-            {/* Test prompt chips */}
-            <div className="flex flex-wrap gap-2 mb-4">
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setTestQuestion('Qual a chave Pix de vocês para pagamento?');
+                  handleTestQuestion('Qual a chave Pix de vocês para pagamento?');
+                }}
+                className="text-[11px] bg-[#0b1220] hover:bg-[#101b33] border border-[#1e293b] hover:border-blue-500/50 text-slate-200 px-3 py-1.5 rounded-full transition cursor-pointer"
+              >
+                "Qual a chave Pix para pagamento?"
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
@@ -930,8 +1255,6 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
               )}
             </form>
           </div>
-        </div>
-      </div>
         </>
       )}
     </div>
