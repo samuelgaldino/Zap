@@ -55,13 +55,13 @@ const DEFAULT_SCHEDULE = {
   emergencyPause: false,
   emergencyPauseReason: '',
   days: [
-    { day: 0, name: 'Domingo', enabled: false, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-    { day: 1, name: 'Segunda-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-    { day: 2, name: 'Terça-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-    { day: 3, name: 'Quarta-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-    { day: 4, name: 'Quinta-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-    { day: 5, name: 'Sexta-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-    { day: 6, name: 'Sábado', enabled: false, startTime: '08:00', endTime: '12:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+    { day: 0, name: 'Domingo', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+    { day: 1, name: 'Segunda-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+    { day: 2, name: 'Terça-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+    { day: 3, name: 'Quarta-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+    { day: 4, name: 'Quinta-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+    { day: 5, name: 'Sexta-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+    { day: 6, name: 'Sábado', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
   ],
 };
 
@@ -2259,6 +2259,29 @@ app.get('/api/whatsapp/schedule/status', (_req, res) => {
   }
 });
 
+// 8.1.1 Update Schedule with Immediate Persistence
+app.post('/api/whatsapp/schedule', (req, res) => {
+  try {
+    const { schedule } = req.body;
+    if (schedule) {
+      botTraining.schedule = {
+        ...botTraining.schedule,
+        ...schedule,
+        days: Array.isArray(schedule.days) ? schedule.days : (botTraining.schedule?.days || DEFAULT_SCHEDULE.days),
+      };
+      saveTraining(botTraining);
+    }
+    const status = checkScheduleStatus(botTraining.schedule);
+    res.json({
+      success: true,
+      schedule: botTraining.schedule,
+      status,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 8.2 Toggle Emergency / Manual Pause of the Bot
 app.post('/api/whatsapp/schedule/toggle-emergency', (req, res) => {
   try {
@@ -3378,11 +3401,13 @@ app.get('/api/analytics/metrics', (req, res) => {
     const threadsArray = Array.from(chatThreads.values());
     const realTotalContacts = threadsArray.length;
     
-    // Calculate total messages in real threads
+    // Calculate real messages in real threads
     let realSentCount = 0;
     let realReceivedCount = 0;
     let realAudiosCount = 0;
     let realReactionsCount = 0;
+    let realAiSentCount = 0;
+    let realManualSentCount = 0;
 
     for (const t of threadsArray) {
       for (const m of t.messages) {
@@ -3390,6 +3415,11 @@ app.get('/api/analytics/metrics', (req, res) => {
           realSentCount++;
           if (m.isAudio) realAudiosCount++;
           if (m.reaction) realReactionsCount++;
+          if (m.isAiResponse || m.id?.startsWith('ai-') || m.id?.startsWith('broadcast-') || m.id?.startsWith('fu-')) {
+            realAiSentCount++;
+          } else {
+            realManualSentCount++;
+          }
         } else {
           realReceivedCount++;
         }
@@ -3400,91 +3430,189 @@ app.get('/api/analytics/metrics', (req, res) => {
     const totalReceived = Math.max(realReceivedCount, waState.stats.totalReceived || 0);
     const activeContacts = Math.max(realTotalContacts, waState.stats.activeChats || 0);
     
-    // Dynamic response rate calculation
+    // Dynamic response rate calculation strictly from real data
     const responseRate = totalReceived > 0 
-      ? Math.min(100, Math.round((totalSent / totalReceived) * 100 * 10) / 10)
-      : 96.4;
+      ? Math.min(100, Math.round((totalSent / totalReceived) * 100))
+      : (totalSent > 0 ? 100 : 0);
 
     const scheduledPreCalls = preCallMeetings.length;
-    const avgDelaySec = agentBehaviorSettings.simulatedTypingDelay || 4;
+    const avgDelaySec = agentBehaviorSettings.simulatedTypingDelay || 3;
 
-    // Time-series based on requested period
+    // Closed deals: real count of contacts marked as closed, won, or completed
+    const closedDeals = threadsArray.filter((t: any) => 
+      t.leadStatus === 'Fechado' || 
+      t.leadStatus === 'Venda Realizada' || 
+      t.tag === 'Fechado' ||
+      t.sentiment?.recommendedAction?.toLowerCase().includes('fechamento')
+    ).length;
+
+    const conversionRate = activeContacts > 0
+      ? `${Math.round((closedDeals / activeContacts) * 100)}%`
+      : '0%';
+
+    const autonomousPercentage = totalSent > 0
+      ? `${Math.round((realAiSentCount / totalSent) * 100)}%`
+      : '100%';
+
+    // Time-series based strictly on real message timestamps
     let timeSeries: any[] = [];
     if (period === '24h') {
       const hours = ['00h', '02h', '04h', '06h', '08h', '10h', '12h', '14h', '16h', '18h', '20h', '22h'];
-      const sentCurve = [2, 1, 0, 3, 14, 28, 35, 42, 38, 29, 18, 8];
-      const recvCurve = [2, 1, 1, 4, 15, 30, 36, 44, 40, 31, 19, 9];
-      timeSeries = hours.map((h, i) => ({
-        label: h,
-        enviadas: Math.max(sentCurve[i], Math.round(totalSent / 12)),
-        recebidas: Math.max(recvCurve[i], Math.round(totalReceived / 12)),
-        contatosAtivos: Math.max(Math.round(activeContacts * (0.4 + (i / 20))), 1),
-        taxaResposta: Math.min(100, Math.round(92 + (i % 6))),
-      }));
+      timeSeries = hours.map((h, i) => {
+        const slotStartHour = i * 2;
+        const slotEndHour = slotStartHour + 2;
+        let sentInSlot = 0;
+        let recvInSlot = 0;
+        const contactsInSlot = new Set<string>();
+
+        for (const t of threadsArray) {
+          for (const m of t.messages) {
+            const hMatch = m.timestamp?.match(/^(\d{1,2}):/);
+            if (hMatch) {
+              const msgHour = parseInt(hMatch[1], 10);
+              if (msgHour >= slotStartHour && msgHour < slotEndHour) {
+                if (m.fromMe) sentInSlot++;
+                else {
+                  recvInSlot++;
+                  contactsInSlot.add(t.jid);
+                }
+              }
+            }
+          }
+        }
+
+        const slotRate = recvInSlot > 0
+          ? Math.min(100, Math.round((sentInSlot / recvInSlot) * 100))
+          : (sentInSlot > 0 ? 100 : 0);
+
+        return {
+          label: h,
+          enviadas: sentInSlot,
+          recebidas: recvInSlot,
+          contatosAtivos: contactsInSlot.size,
+          taxaResposta: slotRate,
+        };
+      });
     } else if (period === '30d') {
-      const days = ['Sem 1', 'Sem 2', 'Sem 3', 'Sem 4'];
-      timeSeries = days.map((sem, i) => ({
-        label: sem,
-        enviadas: Math.max(140 + i * 45, Math.round(totalSent * ((i + 1) / 4))),
-        recebidas: Math.max(148 + i * 42, Math.round(totalReceived * ((i + 1) / 4))),
-        contatosAtivos: Math.max(18 + i * 8, Math.round(activeContacts * ((i + 1) / 4))),
-        taxaResposta: Math.min(100, Math.round(94 + i)),
-      }));
+      const weeks = ['Sem 1', 'Sem 2', 'Sem 3', 'Sem 4'];
+      timeSeries = weeks.map((sem, i) => {
+        const sentInWeek = Math.round(totalSent / 4);
+        const recvInWeek = Math.round(totalReceived / 4);
+        const contactsInWeek = Math.round(activeContacts / 4);
+        const rateInWeek = recvInWeek > 0 ? Math.min(100, Math.round((sentInWeek / recvInWeek) * 100)) : (sentInWeek > 0 ? 100 : 0);
+        return {
+          label: sem,
+          enviadas: sentInWeek,
+          recebidas: recvInWeek,
+          contatosAtivos: contactsInWeek,
+          taxaResposta: rateInWeek,
+        };
+      });
     } else {
-      // 7d default
-      const days = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
-      const sentDays = [24, 38, 45, 52, 48, 29, 16];
-      const recvDays = [26, 40, 47, 54, 50, 31, 17];
-      timeSeries = days.map((d, i) => ({
-        label: d,
-        enviadas: Math.max(sentDays[i], Math.round(totalSent / 7)),
-        recebidas: Math.max(recvDays[i], Math.round(totalReceived / 7)),
-        contatosAtivos: Math.max(Math.round(activeContacts * (0.6 + i * 0.06)), 2),
-        taxaResposta: Math.min(100, Math.round(93 + ((i * 3) % 6))),
-      }));
+      // 7d default: Dom, Seg, Ter, Qua, Qui, Sex, Sáb
+      const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+      const currentDayOfWeek = new Date().getDay();
+
+      timeSeries = days.map((d, dayIndex) => {
+        let sentDay = 0;
+        let recvDay = 0;
+        const contactsDay = new Set<string>();
+
+        for (const t of threadsArray) {
+          for (const m of t.messages) {
+            let msgDay = currentDayOfWeek;
+            const numMatch = m.id?.match(/(\d{10,13})/);
+            if (numMatch) {
+              msgDay = new Date(Number(numMatch[1])).getDay();
+            }
+            if (msgDay === dayIndex) {
+              if (m.fromMe) sentDay++;
+              else {
+                recvDay++;
+                contactsDay.add(t.jid);
+              }
+            }
+          }
+        }
+
+        const rateDay = recvDay > 0
+          ? Math.min(100, Math.round((sentDay / recvDay) * 100))
+          : (sentDay > 0 ? 100 : 0);
+
+        return {
+          label: d,
+          enviadas: sentDay,
+          recebidas: recvDay,
+          contatosAtivos: contactsDay.size,
+          taxaResposta: rateDay,
+        };
+      });
     }
 
-    // Conversion Funnel calculation
-    const baseLeads = Math.max(activeContacts, 120);
-    const initiatedLeads = Math.round(baseLeads * 0.96);
-    const engagedLeads = Math.round(baseLeads * 0.74);
-    const qualifiedLeads = Math.round(baseLeads * 0.46);
-    const meetingsBooked = Math.max(scheduledPreCalls, Math.round(baseLeads * 0.22));
-    const closedDeals = Math.round(meetingsBooked * 0.68);
+    // Real Conversion Funnel based on actual contacts in database
+    const baseLeads = activeContacts;
+    const initiatedLeads = threadsArray.filter((t) => t.messages.some((m) => m.fromMe)).length;
+    const engagedLeads = threadsArray.filter((t) => t.messages.length >= 2).length;
+    const qualifiedLeads = threadsArray.filter((t: any) => 
+      t.sentiment?.sentiment === 'Satisfeito' || 
+      t.tag === 'Interessado' || 
+      t.tag === 'Qualificado' ||
+      t.messages.length >= 4
+    ).length;
+    const meetingsBooked = scheduledPreCalls;
 
     const conversionFunnel = [
-      { name: '1. Leads Recebidos', value: baseLeads, rate: '100%', color: '#3b82f6' },
-      { name: '2. 1º Contato IA', value: initiatedLeads, rate: `${Math.round((initiatedLeads / baseLeads) * 100)}%`, color: '#6366f1' },
-      { name: '3. Conversa Engajada', value: engagedLeads, rate: `${Math.round((engagedLeads / baseLeads) * 100)}%`, color: '#8b5cf6' },
-      { name: '4. Interesse Qualificado', value: qualifiedLeads, rate: `${Math.round((qualifiedLeads / baseLeads) * 100)}%`, color: '#a855f7' },
-      { name: '5. Pré-Call Agendada', value: meetingsBooked, rate: `${Math.round((meetingsBooked / baseLeads) * 100)}%`, color: '#ec4899' },
-      { name: '6. Fechamento Comercial', value: closedDeals, rate: `${Math.round((closedDeals / baseLeads) * 100)}%`, color: '#10b981' },
+      { name: '1. Leads Recebidos', value: baseLeads, rate: baseLeads > 0 ? '100%' : '0%', color: '#3b82f6' },
+      { name: '2. 1º Contato IA', value: initiatedLeads, rate: baseLeads > 0 ? `${Math.round((initiatedLeads / baseLeads) * 100)}%` : '0%', color: '#6366f1' },
+      { name: '3. Conversa Engajada', value: engagedLeads, rate: baseLeads > 0 ? `${Math.round((engagedLeads / baseLeads) * 100)}%` : '0%', color: '#8b5cf6' },
+      { name: '4. Interesse Qualificado', value: qualifiedLeads, rate: baseLeads > 0 ? `${Math.round((qualifiedLeads / baseLeads) * 100)}%` : '0%', color: '#a855f7' },
+      { name: '5. Pré-Call Agendada', value: meetingsBooked, rate: baseLeads > 0 ? `${Math.round((meetingsBooked / baseLeads) * 100)}%` : '0%', color: '#ec4899' },
+      { name: '6. Fechamento Comercial', value: closedDeals, rate: baseLeads > 0 ? `${Math.round((closedDeals / baseLeads) * 100)}%` : '0%', color: '#10b981' },
     ];
 
-    // Sentiment distribution
+    // Real Sentiment distribution from database
     const satisfiedCount = threadsArray.filter((t) => t.sentiment?.sentiment === 'Satisfeito').length;
-    const neutralCount = threadsArray.filter((t) => t.sentiment?.sentiment === 'Neutro').length;
+    const neutralCount = threadsArray.filter((t) => !t.sentiment || t.sentiment?.sentiment === 'Neutro').length;
     const dissatisfiedCount = threadsArray.filter((t) => t.sentiment?.sentiment === 'Insatisfeito').length;
 
     const sentimentDistribution = [
-      { name: 'Satisfeito', value: Math.max(satisfiedCount, 42), color: '#10b981' },
-      { name: 'Neutro', value: Math.max(neutralCount, 18), color: '#64748b' },
-      { name: 'Insatisfeito', value: Math.max(dissatisfiedCount, 3), color: '#f43f5e' },
+      { name: 'Satisfeito', value: satisfiedCount, color: '#10b981' },
+      { name: 'Neutro', value: neutralCount, color: '#64748b' },
+      { name: 'Insatisfeito', value: dissatisfiedCount, color: '#f43f5e' },
     ];
 
-    // Message type distribution
+    // Real Message types from database
     const messageTypes = [
-      { name: 'Texto IA Humanizado', value: Math.max(totalSent - realAudiosCount - realReactionsCount, 150), color: '#3b82f6' },
-      { name: 'Áudios de Voz IA', value: Math.max(realAudiosCount, 28), color: '#10b981' },
-      { name: 'Reações com Emoji', value: Math.max(realReactionsCount, 34), color: '#f59e0b' },
-      { name: 'Intervenção Humana', value: Math.max(threadsArray.filter((t) => t.botPausedForThisChat).length, 6), color: '#c084fc' },
+      { name: 'Texto IA Humanizado', value: Math.max(0, realAiSentCount - realAudiosCount), color: '#3b82f6' },
+      { name: 'Áudios de Voz IA', value: realAudiosCount, color: '#10b981' },
+      { name: 'Reações com Emoji', value: realReactionsCount, color: '#f59e0b' },
+      { name: 'Intervenção Humana', value: realManualSentCount, color: '#c084fc' },
     ];
 
-    // Best Response Hours (Peak conversion)
+    // Real Peak Hours based on message arrival times
+    let morningCount = 0;
+    let afternoonCount = 0;
+    let eveningCount = 0;
+    let nightCount = 0;
+
+    for (const t of threadsArray) {
+      for (const m of t.messages) {
+        const hMatch = m.timestamp?.match(/^(\d{1,2}):/);
+        if (hMatch) {
+          const h = parseInt(hMatch[1], 10);
+          if (h >= 6 && h < 12) morningCount++;
+          else if (h >= 12 && h < 18) afternoonCount++;
+          else if (h >= 18 && h <= 23) eveningCount++;
+          else nightCount++;
+        }
+      }
+    }
+
     const peakHours = [
-      { time: '09:00 - 11:00', volume: 68, taxa: 98, status: 'Pico Matutino' },
-      { time: '14:00 - 16:00', volume: 84, taxa: 96, status: 'Pico da Tarde (Maior Conversão)' },
-      { time: '19:00 - 21:00', volume: 52, taxa: 93, status: 'Pico Noturno' },
+      { time: '09:00 - 12:00', volume: morningCount, taxa: responseRate, status: 'Pico Matutino' },
+      { time: '12:00 - 18:00', volume: afternoonCount, taxa: responseRate, status: 'Pico Vespertino' },
+      { time: '18:00 - 23:00', volume: eveningCount, taxa: responseRate, status: 'Pico Noturno' },
+      { time: '00:00 - 06:00', volume: nightCount, taxa: responseRate, status: 'Madrugada' },
     ];
 
     res.json({
@@ -3495,11 +3623,11 @@ app.get('/api/analytics/metrics', (req, res) => {
         totalMessagesSent: totalSent,
         totalMessagesReceived: totalReceived,
         responseRate,
-        avgResponseTime: `${avgDelaySec}.2s`,
+        avgResponseTime: `${avgDelaySec}s`,
         scheduledPreCalls: meetingsBooked,
         closedDeals,
-        conversionRate: `${Math.round((closedDeals / baseLeads) * 100)}%`,
-        autonomousPercentage: '94.8%',
+        conversionRate,
+        autonomousPercentage,
       },
       timeSeries,
       conversionFunnel,

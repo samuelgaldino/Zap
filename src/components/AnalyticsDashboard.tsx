@@ -80,12 +80,12 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     activeContacts: 0,
     totalMessagesSent: 0,
     totalMessagesReceived: 0,
-    responseRate: 96.4,
-    avgResponseTime: '4.2s',
+    responseRate: 0,
+    avgResponseTime: '3s',
     scheduledPreCalls: 0,
     closedDeals: 0,
-    conversionRate: '21%',
-    autonomousPercentage: '94.8%',
+    conversionRate: '0%',
+    autonomousPercentage: '100%',
   };
 
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -187,9 +187,15 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           <div className="text-2xl font-extrabold text-white tracking-tight">
             {summary.activeContacts}
           </div>
-          <div className="flex items-center gap-1 text-[11px] text-[#34d399] font-medium mt-1">
-            <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>+14.2% esta semana</span>
+          <div className="flex items-center gap-1 text-[11px] font-medium mt-1">
+            {summary.activeContacts > 0 ? (
+              <span className="text-[#34d399] flex items-center gap-0.5">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{summary.activeContacts} chats no banco</span>
+              </span>
+            ) : (
+              <span className="text-[#64748b]">Aguardando 1º contato</span>
+            )}
           </div>
         </div>
 
@@ -217,9 +223,15 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           <div className="text-2xl font-extrabold text-indigo-300 tracking-tight">
             {summary.totalMessagesReceived}
           </div>
-          <div className="flex items-center gap-1 text-[11px] text-[#34d399] font-medium mt-1">
-            <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>Alto volume de leads</span>
+          <div className="flex items-center gap-1 text-[11px] font-medium mt-1">
+            {summary.totalMessagesReceived > 0 ? (
+              <span className="text-[#34d399] flex items-center gap-0.5">
+                <ArrowUpRight className="w-3.5 h-3.5" />
+                <span>Mensagens de clientes</span>
+              </span>
+            ) : (
+              <span className="text-[#64748b]">Nenhuma recebida ainda</span>
+            )}
           </div>
         </div>
 
@@ -233,7 +245,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             {summary.responseRate}%
           </div>
           <div className="text-[11px] text-emerald-400/80 font-medium mt-1">
-            Meta operacional: &gt;90%
+            {summary.totalMessagesReceived > 0 ? 'Cálculo real do histórico' : 'Pronto para responder'}
           </div>
         </div>
 
@@ -261,7 +273,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             {summary.scheduledPreCalls}
           </div>
           <div className="text-[11px] text-purple-300/80 font-medium mt-1">
-            Taxa de conversão: {summary.conversionRate}
+            Conversão real: {summary.conversionRate}
           </div>
         </div>
       </div>
@@ -427,7 +439,9 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 </p>
               </div>
               <span className="text-[11px] font-bold text-emerald-400 bg-[#07271e] border border-emerald-500/40 px-2 py-0.5 rounded-full">
-                {summary.responseRate}% Positivo
+                {summary.activeContacts > 0
+                  ? `${Math.round(((data?.sentimentDistribution?.[0]?.value || 0) / summary.activeContacts) * 100)}% Positivo`
+                  : 'Aguardando Leads'}
               </span>
             </div>
 

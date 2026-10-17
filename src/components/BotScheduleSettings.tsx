@@ -23,13 +23,13 @@ import {
 import { BotScheduleConfig, DaySchedule } from '../types';
 
 const DEFAULT_DAYS: DaySchedule[] = [
-  { day: 0, name: 'Domingo', enabled: false, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-  { day: 1, name: 'Segunda-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-  { day: 2, name: 'Terça-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-  { day: 3, name: 'Quarta-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-  { day: 4, name: 'Quinta-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-  { day: 5, name: 'Sexta-feira', enabled: true, startTime: '08:00', endTime: '18:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
-  { day: 6, name: 'Sábado', enabled: false, startTime: '08:00', endTime: '12:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+  { day: 0, name: 'Domingo', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+  { day: 1, name: 'Segunda-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+  { day: 2, name: 'Terça-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+  { day: 3, name: 'Quarta-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+  { day: 4, name: 'Quinta-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+  { day: 5, name: 'Sexta-feira', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
+  { day: 6, name: 'Sábado', enabled: true, startTime: '08:00', endTime: '22:00', hasLunchBreak: false, lunchStart: '12:00', lunchEnd: '13:00' },
 ];
 
 export const DEFAULT_SCHEDULE_CONFIG: BotScheduleConfig = {
@@ -74,6 +74,9 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
   const [currentTimeStr, setCurrentTimeStr] = useState('');
   const [emergencyLoading, setEmergencyLoading] = useState(false);
 
+  // Prevents recurring interval from wiping out user edits
+  const hasLoadedRef = React.useRef(false);
+
   // Simulator State
   const [simDay, setSimDay] = useState<number>(0); // Sunday
   const [simTime, setSimTime] = useState<string>('21:30');
@@ -85,14 +88,37 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
     simulatedTime: string;
   } | null>(null);
 
-  // Load from backend
-  const fetchStatus = async () => {
+  // Immediate persistence helper: saves instantly to disk and server
+  const persistSchedule = async (newSchedule: BotScheduleConfig) => {
+    setSchedule(newSchedule);
+    try {
+      await fetch('/api/whatsapp/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule: newSchedule }),
+      });
+      fetch('/api/whatsapp/training', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule: newSchedule }),
+      }).catch(() => {});
+      if (onSaveSchedule) onSaveSchedule(newSchedule);
+      fetchStatus(false);
+    } catch (err) {
+      console.error('Erro ao persistir horário:', err);
+    }
+  };
+
+  // Load from backend without wiping out user changes
+  const fetchStatus = async (forceUpdate = false) => {
     try {
       const res = await fetch('/api/whatsapp/schedule/status');
       if (res.ok) {
         const data = await res.json();
-        if (data.schedule) {
+        // Only overwrite local schedule on initial mount or when forced
+        if (data.schedule && (!hasLoadedRef.current || forceUpdate)) {
           setSchedule(data.schedule);
+          hasLoadedRef.current = true;
         }
         if (data.status) {
           setLiveStatus(data.status);
@@ -105,7 +131,8 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 4000);
+    // Recurring polling ONLY updates live evaluation badges, NEVER overwrites schedule edits
+    const interval = setInterval(() => fetchStatus(false), 4000);
     return () => clearInterval(interval);
   }, []);
 
@@ -133,18 +160,9 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
   const handleSave = async () => {
     setLoading(true);
     try {
-      // Update via /api/whatsapp/training
-      const res = await fetch('/api/whatsapp/training', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schedule }),
-      });
-      if (res.ok) {
-        setSaveSuccess(true);
-        if (onSaveSchedule) onSaveSchedule(schedule);
-        await fetchStatus();
-        setTimeout(() => setSaveSuccess(false), 3000);
-      }
+      await persistSchedule(schedule);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
       console.error('Erro ao salvar horários:', err);
       alert('Erro ao salvar configurações de horário.');
@@ -180,6 +198,43 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
     }
   };
 
+  // Quick 7-days active action: activates all 7 days with custom hours or 24/7
+  const activate7DaysAllWeek = () => {
+    const newDays = schedule.days.map((d: DaySchedule) => ({
+      ...d,
+      enabled: true,
+      startTime: '00:00',
+      endTime: '23:59',
+      hasLunchBreak: false,
+    }));
+    const newSchedule: BotScheduleConfig = {
+      ...schedule,
+      enabled: false, // Disabling restriction gives 24/7 freedom
+      days: newDays,
+    };
+    persistSchedule(newSchedule);
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 3000);
+  };
+
+  const activate7DaysStandard = () => {
+    const newDays = schedule.days.map((d: DaySchedule) => ({
+      ...d,
+      enabled: true,
+      startTime: '08:00',
+      endTime: '22:00',
+      hasLunchBreak: false,
+    }));
+    const newSchedule: BotScheduleConfig = {
+      ...schedule,
+      enabled: true,
+      days: newDays,
+    };
+    persistSchedule(newSchedule);
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 3000);
+  };
+
   const applyPreset = (presetType: 'commercial' | 'retail' | 'restaurant' | '247') => {
     let newDays = JSON.parse(JSON.stringify(DEFAULT_DAYS));
 
@@ -197,19 +252,14 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
             ...d,
             enabled: true,
             startTime: '09:00',
-            endTime: d.day === 6 ? '14:00' : '19:00',
-            hasLunchBreak: d.day !== 6,
-            lunchStart: '12:00',
-            lunchEnd: '13:00',
+            endTime: d.day === 6 ? '18:00' : '19:00',
+            hasLunchBreak: false,
           };
         }
         return { ...d, enabled: false };
       });
     } else if (presetType === 'restaurant') {
       newDays = newDays.map((d: DaySchedule) => {
-        if (d.day === 1) {
-          return { ...d, enabled: false }; // Segunda fechado
-        }
         return { ...d, enabled: true, startTime: '18:00', endTime: '23:30', hasLunchBreak: false };
       });
     } else if (presetType === '247') {
@@ -222,10 +272,12 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
       }));
     }
 
-    setSchedule((prev) => ({
-      ...prev,
+    const newSchedule: BotScheduleConfig = {
+      ...schedule,
+      enabled: presetType !== '247',
       days: newDays,
-    }));
+    };
+    persistSchedule(newSchedule);
   };
 
   const handleSimulate = async () => {
@@ -253,10 +305,12 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
   };
 
   const updateDay = (dayIndex: number, field: keyof DaySchedule, value: any) => {
-    setSchedule((prev) => ({
-      ...prev,
-      days: prev.days.map((d) => (d.day === dayIndex ? { ...d, [field]: value } : d)),
-    }));
+    const updatedDays = schedule.days.map((d) => (d.day === dayIndex ? { ...d, [field]: value } : d));
+    const newSchedule: BotScheduleConfig = {
+      ...schedule,
+      days: updatedDays,
+    };
+    persistSchedule(newSchedule);
   };
 
   return (
@@ -429,22 +483,80 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
                   Se desativado, o bot responderá clientes 24 horas por dia, 7 dias por semana sem
                   nenhuma pausa.
                 </span>
+                <div className="mt-2">
+                  {schedule.enabled ? (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/30 px-2.5 py-0.5 rounded-full">
+                      <Clock className="w-3 h-3" />
+                      Horário Comercial Ativo (Conforme grade abaixo)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full">
+                      <Zap className="w-3 h-3 text-emerald-400" />
+                      Atendimento 24/7 Total Liberado (Sem pausas)
+                    </span>
+                  )}
+                </div>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+              <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
                 <input
                   type="checkbox"
                   checked={schedule.enabled}
-                  onChange={(e) => setSchedule({ ...schedule, enabled: e.target.checked })}
+                  onChange={(e) => {
+                    const isChecked = e.target.checked;
+                    persistSchedule({ ...schedule, enabled: isChecked });
+                  }}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-[#1a263d] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
             </div>
 
+            {/* Quick 7-Day Actions */}
+            <div className="pt-4 border-b border-[#1a263d] pb-4">
+              <span className="text-xs font-semibold text-white block mb-2">
+                Atalhos Rápidos de 7 Dias:
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={activate7DaysAllWeek}
+                  className="flex items-center justify-between bg-gradient-to-r from-emerald-950/60 to-[#0e1628] hover:from-emerald-900/60 border border-emerald-500/40 p-3 rounded-xl transition cursor-pointer text-left"
+                >
+                  <div>
+                    <span className="text-xs font-extrabold text-emerald-300 block flex items-center gap-1">
+                      <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                      7 Dias / 24 Horas Direto
+                    </span>
+                    <span className="text-[10px] text-emerald-400/80 block mt-0.5">
+                      Responde 24h sem nenhuma pausa
+                    </span>
+                  </div>
+                  <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={activate7DaysStandard}
+                  className="flex items-center justify-between bg-gradient-to-r from-blue-950/60 to-[#0e1628] hover:from-blue-900/60 border border-blue-500/40 p-3 rounded-xl transition cursor-pointer text-left"
+                >
+                  <div>
+                    <span className="text-xs font-extrabold text-blue-300 block flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5 text-blue-400" />
+                      7 Dias (08h às 22h)
+                    </span>
+                    <span className="text-[10px] text-blue-400/80 block mt-0.5">
+                      Seg a Dom com pausa noturna
+                    </span>
+                  </div>
+                  <Check className="w-4 h-4 text-blue-400 shrink-0" />
+                </button>
+              </div>
+            </div>
+
             {/* Presets */}
             <div className="pt-4">
               <span className="text-xs font-semibold text-white block mb-2">
-                Predefinições Rápidas de Horário:
+                Outras Predefinições Rápidas:
               </span>
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -462,7 +574,7 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
                   className="text-left bg-[#0b1220] hover:bg-[#131d33] border border-[#1e293b] hover:border-blue-500/50 p-2.5 rounded-xl transition cursor-pointer"
                 >
                   <span className="text-xs font-bold text-white block">🛍️ Loja & Varejo</span>
-                  <span className="text-[10px] text-[#94a3b8] block">Seg-Sáb com almoço</span>
+                  <span className="text-[10px] text-[#94a3b8] block">Seg-Sáb: 09h às 19h</span>
                 </button>
 
                 <button
@@ -471,7 +583,7 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
                   className="text-left bg-[#0b1220] hover:bg-[#131d33] border border-[#1e293b] hover:border-blue-500/50 p-2.5 rounded-xl transition cursor-pointer"
                 >
                   <span className="text-xs font-bold text-white block">🍕 Delivery & Bar</span>
-                  <span className="text-[10px] text-[#94a3b8] block">Ter-Dom: 18h às 23h30</span>
+                  <span className="text-[10px] text-[#94a3b8] block">Todos os dias: 18h às 23h30</span>
                 </button>
 
                 <button
@@ -594,15 +706,29 @@ export const BotScheduleSettings: React.FC<BotScheduleSettingsProps> = ({
         <div className="lg:col-span-7 space-y-6">
           {/* Weekly Days Editor */}
           <div className="bg-[#0e1628] border border-[#1a263d] rounded-2xl p-5 shadow-xl">
-            <div className="flex items-center justify-between pb-3 border-b border-[#1a263d] mb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#1a263d] mb-4">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-blue-400" />
-                  Grade Semanal de Expediente & Pausas
+                  Grade Semanal de Expediente & Pausas (7 Dias)
                 </h3>
                 <p className="text-xs text-[#94a3b8] mt-0.5">
-                  Configure abertura, encerramento e intervalos de almoço para cada dia da semana.
+                  Marque os dias em que a IA deve atender clientes. Desmarque apenas se quiser que a IA pause o atendimento.
                 </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = schedule.days.map((d) => ({ ...d, enabled: true }));
+                    persistSchedule({ ...schedule, days: updated });
+                  }}
+                  className="bg-[#101b33] hover:bg-[#16274e] border border-blue-500/40 text-blue-300 text-xs font-bold px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <Check className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Ativar Todos os 7 Dias</span>
+                </button>
               </div>
             </div>
 
