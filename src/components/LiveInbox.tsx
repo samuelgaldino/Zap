@@ -57,6 +57,22 @@ interface LiveMessage {
   reaction?: string;
 }
 
+interface LeadFormFieldAnswer {
+  field: string;
+  value: string;
+}
+
+interface LeadFormContext {
+  id: string;
+  leadName: string;
+  leadPhone: string;
+  extractedAt: string;
+  formAnswers: LeadFormFieldAnswer[];
+  summary: string;
+  status: 'contacted' | 'engaged' | 'qualified' | 'handoff';
+  initialMessageSent: string;
+}
+
 interface ChatThread {
   jid: string;
   name: string;
@@ -67,6 +83,7 @@ interface ChatThread {
   botPausedForThisChat?: boolean;
   notifiedOutOfHours?: boolean;
   sentiment?: SentimentAnalysis;
+  leadFormContext?: LeadFormContext;
 }
 
 export interface LiveInboxProps {
@@ -1044,6 +1061,25 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
                   </div>
                 </div>
               </div>
+
+              {/* 📋 RESPONDEFORME AI FORM TRIAGE STRIP */}
+              {activeThread.leadFormContext && (
+                <div className="bg-[#0b1324] border-b border-[#1a2942] px-4 py-2.5 flex items-center justify-between text-xs text-slate-300">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-900/60 text-blue-300 border border-blue-500/40 shrink-0">
+                      📋 RespondeForm AI
+                    </span>
+                    <span className="truncate text-slate-300 text-[11px]">
+                      <strong>Perfil do Formulário:</strong> {activeThread.leadFormContext.summary || 'Respostas de formulário registradas'}
+                    </span>
+                  </div>
+                  {activeThread.leadFormContext.formAnswers && activeThread.leadFormContext.formAnswers.length > 0 && (
+                    <span className="text-[10px] text-slate-400 shrink-0 hidden md:inline ml-2 font-mono">
+                      {activeThread.leadFormContext.formAnswers.length} perguntas respondidas
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* 🎯 AI SENTIMENT DIAGNOSTIC STRIP ON ACTIVE CHAT */}
               {activeThread.sentiment && (

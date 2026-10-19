@@ -1,6 +1,6 @@
 {
-  "summary": "Plano de implementação completo para o ArcoZapp: atualização da marca e branding, remoção de tutoriais/códigos expostos, renomeação para 'Monitor de Contatos', cadência modular de follow-up, sistema de lembretes pré-call em grupos, limpeza de leads fakes com sincronização real do WhatsApp, importação inteligente de scripts de treinamento via IA Gemini e configurações comportamentais do agente (tempo de resposta, humanização e limite de caracteres).",
-  "updatedAt": "2026-10-16T16:17:37.588861886Z",
+  "summary": "Plano arquitetural detalhado para o módulo de Triagem Automática de Leads por Formulário / Print (RespondeForme AI). Permite envio do print do formulário via Painel Web ou direto pelo WhatsApp do operador, extração multimodal dos dados via Gemini Vision, abordagem personalizada curta solicitando permissão e triagem inteligente contextualizada com as respostas fornecidas.",
+  "updatedAt": "2026-10-19T19:42:04.963919760Z",
   "requestFeedback": true,
   "userFacing": true
 }

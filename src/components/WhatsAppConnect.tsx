@@ -15,6 +15,7 @@ import {
   Sparkles,
   ArrowRight,
   Moon,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface WAStatusResponse {
@@ -35,11 +36,13 @@ interface WAStatusResponse {
 interface WhatsAppConnectProps {
   onGoToTraining: () => void;
   onGoToInbox: () => void;
+  onGoToFormTriage?: () => void;
 }
 
 export const WhatsAppConnect: React.FC<WhatsAppConnectProps> = ({
   onGoToTraining,
   onGoToInbox,
+  onGoToFormTriage,
 }) => {
   const [waStatus, setWaStatus] = useState<WAStatusResponse>({
     status: 'disconnected',
@@ -318,9 +321,18 @@ export const WhatsAppConnect: React.FC<WhatsAppConnectProps> = ({
                 </div>
 
                 <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto shrink-0">
+                  {onGoToFormTriage && (
+                    <button
+                      onClick={onGoToFormTriage}
+                      className="w-full sm:w-auto flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold text-xs sm:text-sm px-5 py-2.5 rounded-full shadow-lg shadow-blue-600/30 transition cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-4 h-4" />
+                      Triagem de Formulários
+                    </button>
+                  )}
                   <button
                     onClick={onGoToTraining}
-                    className="w-full sm:w-auto flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs sm:text-sm px-5 py-2.5 rounded-full shadow-lg shadow-blue-600/30 transition cursor-pointer"
+                    className="w-full sm:w-auto flex items-center justify-center gap-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 font-semibold text-xs sm:text-sm px-5 py-2.5 rounded-full transition cursor-pointer"
                   >
                     <Sparkles className="w-4 h-4" />
                     Editar Treinamento
@@ -333,6 +345,36 @@ export const WhatsAppConnect: React.FC<WhatsAppConnectProps> = ({
                     Monitor de Contatos
                   </button>
                 </div>
+              </div>
+
+              {/* Form Triage Quick Card */}
+              <div className="bg-[#0b1324] border border-blue-500/30 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl relative overflow-hidden">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/40 text-blue-400 flex items-center justify-center shrink-0 shadow-md">
+                    <FileSpreadsheet className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 bg-blue-950/60 border border-blue-500/30 px-2.5 py-0.5 rounded-full inline-block mb-1">
+                      RespondeForm AI Ativo
+                    </span>
+                    <h3 className="text-base font-bold text-white">
+                      Triagem Instantânea por Print de Formulário
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
+                      Cole o print das respostas de qualquer formulário (ou envie a foto no seu WhatsApp) para a IA iniciar a abordagem com uma mensagem curta e qualificar o lead automaticamente.
+                    </p>
+                  </div>
+                </div>
+
+                {onGoToFormTriage && (
+                  <button
+                    onClick={onGoToFormTriage}
+                    className="w-full md:w-auto shrink-0 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs sm:text-sm px-5 py-2.5 rounded-xl transition cursor-pointer shadow-lg shadow-blue-600/25"
+                  >
+                    Abrir Triagem por Print
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
           ) : (

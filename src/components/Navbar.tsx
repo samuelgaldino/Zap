@@ -13,10 +13,12 @@ import {
   Activity,
   MessageSquare,
   BarChart3,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 export type ActiveTab =
   | 'connect'
+  | 'form_triage'
   | 'inbox'
   | 'analytics'
   | 'followup'
@@ -84,6 +86,13 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, busines
       icon: Sun,
       countBadge: waConnected ? undefined : '1',
       badgeColor: 'bg-rose-500/20 text-rose-400 border border-rose-500/40',
+    },
+    {
+      id: 'form_triage' as ActiveTab,
+      label: 'RespondeForm AI',
+      icon: FileSpreadsheet,
+      countBadge: 'IA',
+      badgeColor: 'bg-blue-500/20 text-blue-300 border border-blue-500/40',
     },
     {
       id: 'inbox' as ActiveTab,

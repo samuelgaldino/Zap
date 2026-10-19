@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import makeWASocket, {
   DisconnectReason,
@@ -23,7 +23,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Path to store WhatsApp credentials
 const AUTH_DIR = path.resolve(__dirname, 'whatsapp_auth');
@@ -331,6 +332,33 @@ export interface SentimentAnalysis {
   analyzedAt: string;
 }
 
+export interface LeadFormFieldAnswer {
+  field: string;
+  value: string;
+}
+
+export interface LeadFormContext {
+  id: string;
+  leadName: string;
+  leadPhone: string;
+  extractedAt: string;
+  formAnswers: LeadFormFieldAnswer[];
+  summary: string;
+  status: 'contacted' | 'engaged' | 'qualified' | 'handoff';
+  stage?: 'awaiting_confirmation' | 'confirmed_triaging' | 'qualified';
+  triggerStatus?: 'pending_reply' | 'positive_confirmed' | 'manual_confirmed';
+  confirmedAt?: string;
+  lastCustomerMessage?: string;
+  initialMessageSent: string;
+}
+
+export interface LeadFormEntry extends LeadFormContext {
+  jid: string;
+  source: 'web_panel' | 'whatsapp_photo';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ChatThread {
   jid: string;
   name: string;
@@ -341,6 +369,7 @@ export interface ChatThread {
   botPausedForThisChat?: boolean;
   notifiedOutOfHours?: boolean;
   sentiment?: SentimentAnalysis;
+  leadFormContext?: LeadFormContext;
 }
 
 /* DEPRECATED_SEEDS removed */
@@ -614,9 +643,217 @@ function saveWhatsAppContacts() {
   }
 }
 
+// Path to persist Form Triage Leads (RespondeForme AI)
+const LEAD_FORMS_FILE = path.resolve(__dirname, 'lead_forms.json');
+
+function loadLeadForms(): LeadFormEntry[] {
+  try {
+    if (fs.existsSync(LEAD_FORMS_FILE)) {
+      const raw = fs.readFileSync(LEAD_FORMS_FILE, 'utf-8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) return list;
+    }
+  } catch (err) {
+    console.error('Erro ao carregar leads de formulário salvos:', err);
+  }
+  return [];
+}
+
+function saveLeadForms(entries: LeadFormEntry[]) {
+  try {
+    fs.writeFileSync(LEAD_FORMS_FILE, JSON.stringify(entries, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Erro ao persistir leads de formulário:', err);
+  }
+}
+
 // Real WhatsApp Chat Threads & Contacts (persisted on disk, strictly populated by connected WhatsApp)
 const chatThreads: Map<string, ChatThread> = loadSavedWhatsAppChats();
 const knownContacts: Map<string, { name?: string; notify?: string; phone: string }> = loadSavedWhatsAppContacts();
+
+// =========================================================================
+// RESPONDEFORME AI - MULTIMODAL FORM PRINT EXTRACTION & DISPATCH
+// =========================================================================
+async function extractLeadFromImage(base64Data: string, mimeType: string = 'image/png'): Promise<{
+  leadName: string;
+  leadPhone: string;
+  formAnswers: LeadFormFieldAnswer[];
+  summary: string;
+  initialMessage: string;
+}> {
+  const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-3.8-flash',
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            mimeType: mimeType || 'image/png',
+            data: cleanBase64,
+          },
+        },
+        {
+          text: `Você é um assistente especialista em OCR, visão computacional e triagem comercial.
+Analise a imagem enviada, que é um print ou foto de um formulário preenchido por um lead/cliente (como Google Forms, RespondeForm, Typeform, RD Station, Hotmart, Instagram Lead Form, etc.).
+
+Extraia com máxima fidelidade e atenção:
+1. "leadName": O nome ou primeiro nome do lead/cliente que preencheu o formulário (ex: "Samuel", "Juliana Silva"). Se não houver nome explícito, deixe "".
+2. "leadPhone": O telefone ou WhatsApp do lead preenchido, com DDD (ex: "5511999887766", "11988887777"). Remova caracteres como parênteses ou traços, retornando apenas dígitos ou string limpa. Se não houver telefone no print, deixe "".
+3. "formAnswers": Um array de objetos com cada pergunta ou campo do formulário e a respectiva resposta do lead. Exemplo: [{"field": "Qual seu objetivo principal?", "value": "Aumentar faturamento"}, {"field": "Faturamento atual", "value": "R$ 10k a 30k"}].
+4. "summary": Um resumo executivo claro de 2 a 3 frases com o perfil, dores, faturamento e interesses do lead para que o atendente e a IA saibam exatamente como abordá-lo e qualificá-lo.
+5. "initialMessage": O script inicial obrigatório no formato exato: "Olá, {leadName}, tudo bem? Eu estou falando com você mesmo?".`,
+        },
+      ],
+    },
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          leadName: { type: Type.STRING, description: 'Nome do lead' },
+          leadPhone: { type: Type.STRING, description: 'Telefone com DDD do lead' },
+          formAnswers: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                field: { type: Type.STRING },
+                value: { type: Type.STRING },
+              },
+              required: ['field', 'value'],
+            },
+          },
+          summary: { type: Type.STRING, description: 'Resumo das necessidades do lead' },
+          initialMessage: { type: Type.STRING, description: 'Script inicial de confirmação de identidade' },
+        },
+        required: ['leadName', 'leadPhone', 'formAnswers', 'summary', 'initialMessage'],
+      },
+    },
+  });
+
+  const rawJson = response.text?.trim() || '{}';
+  const parsed = JSON.parse(rawJson);
+  const formattedName = parsed.leadName?.trim();
+  const defaultInitial = formattedName
+    ? `Olá, ${formattedName}, tudo bem? Eu estou falando com você mesmo?`
+    : 'Olá, tudo bem? Eu estou falando com você mesmo?';
+
+  return {
+    leadName: parsed.leadName || '',
+    leadPhone: parsed.leadPhone || '',
+    formAnswers: Array.isArray(parsed.formAnswers) ? parsed.formAnswers : [],
+    summary: parsed.summary || '',
+    initialMessage: parsed.initialMessage || defaultInitial,
+  };
+}
+
+async function dispatchLeadForm(data: {
+  leadName: string;
+  leadPhone: string;
+  formAnswers: LeadFormFieldAnswer[];
+  summary: string;
+  customMessage?: string;
+  source?: 'web_panel' | 'whatsapp_photo';
+}): Promise<{ success: boolean; thread: ChatThread; entry: LeadFormEntry }> {
+  let cleanPhone = (data.leadPhone || '').replace(/\D/g, '');
+  if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+    cleanPhone = '55' + cleanPhone;
+  }
+  if (!cleanPhone || cleanPhone.length < 10) {
+    throw new Error('Número de WhatsApp inválido ou incompleto (necessário DDD + número).');
+  }
+
+  const jid = `${cleanPhone}@s.whatsapp.net`;
+  const contactName = data.leadName?.trim() || `+${cleanPhone}`;
+  const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const messageToSend =
+    data.customMessage?.trim() ||
+    (data.leadName?.trim()
+      ? `Olá, ${data.leadName.trim()}, tudo bem? Eu estou falando com você mesmo?`
+      : 'Olá, tudo bem? Eu estou falando com você mesmo?');
+
+  const leadFormContext: LeadFormContext = {
+    id: `form-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    leadName: contactName,
+    leadPhone: cleanPhone,
+    extractedAt: new Date().toISOString(),
+    formAnswers: data.formAnswers || [],
+    summary: data.summary || '',
+    status: 'contacted',
+    stage: 'awaiting_confirmation',
+    triggerStatus: 'pending_reply',
+    initialMessageSent: messageToSend,
+  };
+
+  let thread = chatThreads.get(jid);
+  if (!thread) {
+    thread = {
+      jid,
+      name: contactName,
+      lastMessage: messageToSend,
+      lastTimestamp: timestamp,
+      unreadCount: 0,
+      messages: [],
+      botPausedForThisChat: false,
+      leadFormContext,
+    };
+    chatThreads.set(jid, thread);
+  } else {
+    thread.name = contactName;
+    thread.leadFormContext = leadFormContext;
+  }
+
+  knownContacts.set(jid, { name: contactName, phone: cleanPhone });
+
+  // Send initial message if connected
+  if (sock && waState.status === 'connected') {
+    try {
+      await sock.sendPresenceUpdate('composing', jid);
+      await new Promise((r) => setTimeout(r, 1200));
+      await sock.sendMessage(jid, { text: messageToSend });
+      await sock.sendPresenceUpdate('paused', jid);
+
+      thread.messages.push({
+        id: `form-msg-${Date.now()}`,
+        chatJid: jid,
+        senderName: 'Você (RespondeForm AI)',
+        fromMe: true,
+        text: messageToSend,
+        timestamp,
+      });
+      thread.lastMessage = messageToSend;
+      thread.lastTimestamp = timestamp;
+      waState.stats.totalReplied = (waState.stats.totalReplied || 0) + 1;
+    } catch (sendErr) {
+      console.warn('Erro ao disparar mensagem para lead de formulário:', sendErr);
+    }
+  }
+
+  const allForms = loadLeadForms();
+  const entry: LeadFormEntry = {
+    ...leadFormContext,
+    jid,
+    source: data.source || 'web_panel',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  allForms.unshift(entry);
+  saveLeadForms(allForms);
+
+  saveWhatsAppChats();
+  saveWhatsAppContacts();
+
+  recordSystemLog(
+    'connection',
+    'Lead de Formulário Acionado',
+    `Abordagem disparada para ${contactName} (+${cleanPhone}) com triagem ativa.`,
+    contactName,
+    'success'
+  );
+
+  return { success: true, thread, entry };
+}
 
 // =========================================================================
 // FOLLOW-UP CADENCE STORE
@@ -1595,7 +1832,57 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
     }
   }
 
-  if (!text && !isAudio) return;
+  const imageMessage = messageContent.imageMessage;
+  const isImage = Boolean(imageMessage);
+
+  // Check if this image is a form print sent by operator or with caption trigger
+  if (isImage && imageMessage) {
+    const caption = (imageMessage.caption || '').trim();
+    const isFormTrigger =
+      isFromMe ||
+      caption.toLowerCase().includes('#lead') ||
+      caption.toLowerCase().includes('#triagem') ||
+      caption.toLowerCase().includes('#form') ||
+      /\d{10,13}/.test(caption);
+
+    if (isFormTrigger) {
+      try {
+        console.log(`📸 Print de formulário recebido via WhatsApp de ${remoteJid}...`);
+        const imgBuffer = await downloadMediaMessage(msg as any, 'buffer', {});
+        const imgBase64 = (imgBuffer as Buffer).toString('base64');
+        const mimeType = imageMessage.mimetype || 'image/jpeg';
+
+        const extracted = await extractLeadFromImage(imgBase64, mimeType);
+
+        // Check if caption contains explicit phone number:
+        const captionPhoneMatch = caption.match(/\b(?:\+?55)?\s?\(?(\d{2})\)?\s?(\d{4,5})[-.\s]?(\d{4})\b/);
+        if (captionPhoneMatch) {
+          extracted.leadPhone = captionPhoneMatch[0].replace(/\D/g, '');
+        }
+
+        if (extracted.leadPhone && extracted.leadPhone.replace(/\D/g, '').length >= 10) {
+          const dispatched = await dispatchLeadForm({
+            ...extracted,
+            source: 'whatsapp_photo',
+          });
+
+          await sock.sendMessage(remoteJid, {
+            text: `✅ *Lead Identificado com Sucesso!*\n\n👤 *Nome:* ${extracted.leadName || 'Não informado'}\n📱 *WhatsApp:* +${dispatched.entry.leadPhone}\n📋 *Resumo:* ${extracted.summary}\n\n🚀 *Status:* Abordagem inicial enviada para o lead e triagem iniciada!`,
+          });
+          return;
+        } else {
+          await sock.sendMessage(remoteJid, {
+            text: `⚠️ Identifiquei os dados do formulário de *${extracted.leadName || 'Lead'}*, porém o número de telefone não ficou visível no print.\n\nEnvie a foto novamente com o telefone na legenda (ex: *#lead 11999998888*).`,
+          });
+          return;
+        }
+      } catch (err: any) {
+        console.error('Erro ao processar imagem de lead no WhatsApp:', err);
+      }
+    }
+  }
+
+  if (!text && !isAudio && !isImage) return;
 
   const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -1632,8 +1919,8 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
   };
 
   thread.messages.push(logMessage);
-  // Keep last 40 messages per thread
-  if (thread.messages.length > 40) {
+  // Keep last 100 messages per thread for maximum deep context
+  if (thread.messages.length > 100) {
     thread.messages.shift();
   }
 
@@ -1760,6 +2047,28 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
     }
   }
 
+  // Update leadFormContext status if first reply received
+  if (thread.leadFormContext && (thread.leadFormContext.status === 'contacted' || thread.leadFormContext.stage === 'awaiting_confirmation')) {
+    thread.leadFormContext.status = 'engaged';
+    thread.leadFormContext.stage = 'confirmed_triaging';
+    thread.leadFormContext.triggerStatus = 'positive_confirmed';
+    thread.leadFormContext.confirmedAt = new Date().toISOString();
+    thread.leadFormContext.lastCustomerMessage = text || (isAudio ? '🎤 Mensagem de áudio' : '');
+    try {
+      const allForms = loadLeadForms();
+      const fIndex = allForms.findIndex((f) => f.id === thread.leadFormContext?.id);
+      if (fIndex >= 0) {
+        allForms[fIndex].status = 'engaged';
+        allForms[fIndex].stage = 'confirmed_triaging';
+        allForms[fIndex].triggerStatus = 'positive_confirmed';
+        allForms[fIndex].confirmedAt = new Date().toISOString();
+        allForms[fIndex].lastCustomerMessage = text || (isAudio ? '🎤 Mensagem de áudio' : '');
+        allForms[fIndex].updatedAt = new Date().toISOString();
+        saveLeadForms(allForms);
+      }
+    } catch {}
+  }
+
   // Generate autonomous AI reply with Gemini
   try {
     // Show typing status in WhatsApp
@@ -1793,6 +2102,28 @@ INSTRUÇÃO OBRIGATÓRIA DE FORMATO:
 Coloque exatamente na PRIMEIRA LINHA da sua resposta a reação escolhida:
 [REACAO: 👍] ou [REACAO: ❤️] ou [REACAO: 🔥] ou [REACAO: 🙏] ou [REACAO: NENHUMA]
 E na linha de baixo, escreva a sua resposta normal em texto para o cliente.
+MEMÓRIA DE LONGO PRAZO E CONTEXTO MÁXIMO DA CONVERSA (REGRA FUNDAMENTAL):
+- NUNCA, SOB HIPÓTESE ALGUMA, INICIE UMA RESPOSTA COMO SE FOSSE UMA CONVERSA DO ZERO se já houver qualquer interação anterior no histórico!
+- Se você já conversou com este contato antes, você JÁ O CONHECE! Não repita apresentações formais ("Olá, sou o assistente...", "Como posso te ajudar hoje?").
+- Sempre continue a conversa ancorado 100% no contexto do que já vinha sendo conversado, reconhecendo a pessoa pelo nome com familiaridade e continuidade fluida.
+
+${thread.leadFormContext ? `
+🎯 PROTOCOLO DE TRIAGEM ATIVA DO FORMULÁRIO (SCRIPT OFICIAL DO SAMUEL):
+• Nome do Lead no Formulário: ${thread.leadFormContext.leadName || 'Cliente'}
+• Telefone: +${thread.leadFormContext.leadPhone || ''}
+• Resumo das Dores / Perfil: ${thread.leadFormContext.summary || 'Não especificado'}
+• Respostas Detalhadas do Formulário:
+${thread.leadFormContext.formAnswers?.map((a: any) => `  - ${a.field}: ${a.value}`).join('\n') || '  (Sem campos adicionais)'}
+
+GATILHO E ESTRUTURA DO SCRIPT DE ATENDIMENTO DO SAMUEL:
+1. A mensagem de gatilho inicial enviada foi: "Olá, ${thread.leadFormContext.leadName || 'tudo bem'}, tudo bem? Eu estou falando com você mesmo?"
+2. Se o cliente respondeu positivamente confirmando quem é ("Sim", "Sou eu", "É ele", "Comigo mesmo", "Isso", "Opa", "Fala aí", "Com quem falo?", "Pode falar", etc.):
+   ESSE POSITIVO É O GATILHO OFICIAL PARA VOCÊ PROSSEGUIR COM A TRIAGEM CONTEXTUAL:
+   a) Apresente-se no tom exato do Samuel: "Maravilha, ${thread.leadFormContext.leadName?.split(' ')[0] || ''}! Aqui é o Samuel, prazer falar contigo! 😊"
+   b) Contextualize da onde pegou o contato: mencione de forma natural que você viu as respostas que ele acabou de preencher no formulário.
+   c) Crie uma pergunta de triagem natural e altamente contextualizada com as respostas que ele deu no formulário (citando a principal dor, faturamento ou objetivo que ele preencheu).
+   d) NUNCA pergunte de novo o que ele já respondeu no formulário! Mostre que você já leu e prestou atenção nas respostas dele.
+` : ''}
 `;
 
     // Build contents: if customer sent audio, include the audio buffer!
@@ -1814,7 +2145,8 @@ E na linha de baixo, escreva a sua resposta normal em texto para o cliente.
         ],
       });
     } else {
-      for (const m of thread.messages.slice(-6)) {
+      // Send up to 30 recent messages for deep historical context
+      for (const m of thread.messages.slice(-30)) {
         contents.push({
           role: m.fromMe ? 'model' : 'user',
           parts: [{ text: m.text }],
@@ -3635,6 +3967,224 @@ app.get('/api/analytics/metrics', (req, res) => {
       messageTypes,
       peakHours,
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =========================================================================
+// 20. RESPONDEFORME AI - FORM PRINT TRIAGE ROUTES
+// =========================================================================
+
+// 20.1 Extract lead data from form print/screenshot
+app.post('/api/lead-form/extract', async (req, res) => {
+  try {
+    const { imageBase64, mimeType } = req.body || {};
+    if (!imageBase64) {
+      res.status(400).json({ error: 'Nenhuma imagem enviada para análise.' });
+      return;
+    }
+
+    const extracted = await extractLeadFromImage(imageBase64, mimeType || 'image/png');
+    res.json({
+      success: true,
+      ...extracted,
+    });
+  } catch (err: any) {
+    console.error('Erro na extração de formulário por imagem:', err);
+    res.status(500).json({ error: `Falha ao analisar print do formulário: ${err.message}` });
+  }
+});
+
+// 20.2 Dispatch initial approach and register triage context
+app.post('/api/lead-form/dispatch', async (req, res) => {
+  try {
+    const { leadName, leadPhone, formAnswers, summary, customMessage } = req.body || {};
+    if (!leadPhone) {
+      res.status(400).json({ error: 'Número de telefone do lead é obrigatório.' });
+      return;
+    }
+
+    const result = await dispatchLeadForm({
+      leadName,
+      leadPhone,
+      formAnswers: Array.isArray(formAnswers) ? formAnswers : [],
+      summary: summary || '',
+      customMessage,
+      source: 'web_panel',
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('Erro ao disparar lead de formulário:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 20.3 List all form triage leads with enriched trigger tracking
+app.get('/api/lead-form/list', (_req, res) => {
+  try {
+    const forms = loadLeadForms();
+    // Sync current status and recent interaction with live thread
+    const enriched = forms.map((f) => {
+      const thread = chatThreads.get(f.jid);
+      let lastCustomerMsg = '';
+      let messagesCount = 0;
+      let hasReplied = false;
+
+      if (thread) {
+        messagesCount = thread.messages.length;
+        if (thread.leadFormContext?.status) {
+          f.status = thread.leadFormContext.status;
+        }
+        if (thread.leadFormContext?.stage) {
+          f.stage = thread.leadFormContext.stage;
+        }
+        if (thread.leadFormContext?.triggerStatus) {
+          f.triggerStatus = thread.leadFormContext.triggerStatus;
+        }
+        if (thread.leadFormContext?.confirmedAt) {
+          f.confirmedAt = thread.leadFormContext.confirmedAt;
+        }
+        const incomingMsgs = thread.messages.filter((m) => !m.fromMe);
+        if (incomingMsgs.length > 0) {
+          hasReplied = true;
+          lastCustomerMsg = incomingMsgs[incomingMsgs.length - 1].text || '';
+        }
+      }
+
+      const stage =
+        f.stage || (f.status === 'contacted' ? 'awaiting_confirmation' : 'confirmed_triaging');
+
+      return {
+        ...f,
+        stage,
+        hasReplied,
+        lastCustomerMessage: lastCustomerMsg,
+        lastMessage: thread?.lastMessage || f.initialMessageSent,
+        lastTimestamp: thread?.lastTimestamp || '',
+        messagesCount,
+      };
+    });
+
+    res.json({ success: true, total: enriched.length, leads: enriched });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 20.4 Resend initial trigger message to lead
+app.post('/api/lead-form/resend-trigger', async (req, res) => {
+  try {
+    const { id } = req.body || {};
+    const forms = loadLeadForms();
+    const entry = forms.find((f) => f.id === id);
+    if (!entry) {
+      res.status(404).json({ error: 'Lead não encontrado.' });
+      return;
+    }
+
+    const messageToSend =
+      entry.initialMessageSent ||
+      (entry.leadName?.trim()
+        ? `Olá, ${entry.leadName.trim()}, tudo bem? Eu estou falando com você mesmo?`
+        : 'Olá, tudo bem? Eu estou falando com você mesmo?');
+
+    if (sock && waState.status === 'connected') {
+      try {
+        await sock.sendPresenceUpdate('composing', entry.jid);
+        await new Promise((r) => setTimeout(r, 1000));
+        await sock.sendMessage(entry.jid, { text: messageToSend });
+        await sock.sendPresenceUpdate('paused', entry.jid);
+      } catch (sendErr) {
+        console.warn('Erro ao reenviar gatilho no WhatsApp:', sendErr);
+      }
+    }
+
+    const thread = chatThreads.get(entry.jid);
+    const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    if (thread) {
+      thread.messages.push({
+        id: `resend-${Date.now()}`,
+        chatJid: entry.jid,
+        senderName: 'Você (RespondeForm AI)',
+        fromMe: true,
+        text: messageToSend,
+        timestamp,
+      });
+      thread.lastMessage = messageToSend;
+      thread.lastTimestamp = timestamp;
+      saveWhatsAppChats();
+    }
+
+    entry.updatedAt = new Date().toISOString();
+    saveLeadForms(forms);
+
+    recordSystemLog(
+      'connection',
+      'Gatilho Reenviado',
+      `Gatilho de confirmação reenviado para ${entry.leadName} (${entry.leadPhone}).`,
+      entry.leadName,
+      'info'
+    );
+
+    res.json({ success: true, message: 'Gatilho reenviado com sucesso!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 20.5 Manually confirm trigger / advance to triage
+app.post('/api/lead-form/confirm-trigger', async (req, res) => {
+  try {
+    const { id } = req.body || {};
+    const forms = loadLeadForms();
+    const entry = forms.find((f) => f.id === id);
+    if (!entry) {
+      res.status(404).json({ error: 'Lead não encontrado.' });
+      return;
+    }
+
+    entry.status = 'engaged';
+    entry.stage = 'confirmed_triaging';
+    entry.triggerStatus = 'manual_confirmed';
+    entry.confirmedAt = new Date().toISOString();
+    entry.updatedAt = new Date().toISOString();
+    saveLeadForms(forms);
+
+    const thread = chatThreads.get(entry.jid);
+    if (thread) {
+      if (thread.leadFormContext) {
+        thread.leadFormContext.status = 'engaged';
+        thread.leadFormContext.stage = 'confirmed_triaging';
+        thread.leadFormContext.triggerStatus = 'manual_confirmed';
+        thread.leadFormContext.confirmedAt = new Date().toISOString();
+      }
+      saveWhatsAppChats();
+    }
+
+    recordSystemLog(
+      'connection',
+      'Confirmação Manual de Lead',
+      `Lead ${entry.leadName} confirmado manualmente pelo operador. Triagem liberada.`,
+      entry.leadName,
+      'success'
+    );
+
+    res.json({ success: true, entry, message: 'Lead marcado como confirmado!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 20.6 Delete or archive a form lead entry
+app.delete('/api/lead-form/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    let forms = loadLeadForms();
+    forms = forms.filter((f) => f.id !== id);
+    saveLeadForms(forms);
+    res.json({ success: true, remaining: forms.length });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

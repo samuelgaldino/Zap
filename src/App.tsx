@@ -9,6 +9,7 @@ import { FollowUpManager } from './components/FollowUpManager';
 import { PreCallReminders } from './components/PreCallReminders';
 import { AgentSettingsView } from './components/AgentSettingsView';
 import { BotScheduleSettings } from './components/BotScheduleSettings';
+import { FormTriageSection } from './components/FormTriageSection';
 import { BotConfig } from './types';
 import { BUSINESS_PRESETS } from './data/presets';
 import { ExternalLink } from 'lucide-react';
@@ -32,6 +33,14 @@ export default function App() {
           <WhatsAppConnect
             onGoToTraining={() => setActiveTab('training')}
             onGoToInbox={() => setActiveTab('inbox')}
+            onGoToFormTriage={() => setActiveTab('form_triage')}
+          />
+        )}
+
+        {activeTab === 'form_triage' && (
+          <FormTriageSection
+            onGoToInbox={() => setActiveTab('inbox')}
+            onGoToConnect={() => setActiveTab('connect')}
           />
         )}
 
