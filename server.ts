@@ -2897,6 +2897,143 @@ E depois o texto normal da mensagem.
   }
 });
 
+// 9.1 Simulator AI Chat Endpoint (/api/chat)
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { messages, botConfig } = req.body || {};
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: 'Nenhuma mensagem informada.' });
+      return;
+    }
+
+    const config = botConfig || botTraining;
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
+
+    // Check handoff keywords
+    const humanKeywords: string[] = Array.isArray(config.humanTransferKeywords)
+      ? config.humanTransferKeywords
+      : ['humano', 'atendente', 'falar com atendente', 'pessoa', 'suporte humano'];
+
+    const lowerText = lastUserMsg.toLowerCase();
+    const handoffTriggered = humanKeywords.some((kw) => kw && lowerText.includes(kw.toLowerCase().trim()));
+
+    if (handoffTriggered) {
+      res.json({
+        reply: `Entendido perfeitamente! Já pausei o bot e notifiquei nossa equipe humana da ${config.businessName || 'empresa'}. Um atendente já vai assumir esta conversa com você! 😊🙏`,
+        handoffTriggered: true,
+        handoffReason: `Palavra-chave de transbordo humano identificada: "${lastUserMsg}"`,
+      });
+      return;
+    }
+
+    const systemInstruction = `
+Você é ${config.personaName || botTraining.personaName}, o assistente virtual oficial de "${config.businessName || botTraining.businessName}" (Nicho: ${config.niche || botTraining.niche}).
+Você está interagindo no WhatsApp com um cliente.
+
+BASE DE CONHECIMENTO E INFORMAÇÕES DA EMPRESA:
+${config.knowledgeBase || botTraining.knowledgeBase}
+
+INSTRUÇÕES E REGRAS:
+${config.customInstructions || botTraining.rules?.join('\n') || 'Atenda sempre com simpatia, naturalidade e clareza.'}
+
+DIRETRIZES DE ESTILO:
+- Atendimento humanizado e acolhedor (zero tom robótico).
+- Respostas curtas e objetivas (1 a 3 frases por mensagem).
+- Use formatação do WhatsApp (*negrito*).
+`;
+
+    try {
+      const chatContents = messages.map((m: any) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: String(m.content || '') }],
+      }));
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: chatContents,
+        config: {
+          systemInstruction,
+          temperature: 0.7,
+        },
+      });
+
+      const reply = response.text?.trim() || 'Olá! Como posso ajudar você hoje?';
+      res.json({
+        reply,
+        handoffTriggered: false,
+      });
+    } catch (genErr: any) {
+      console.warn('Fallback para /api/chat:', genErr?.message);
+      res.json({
+        reply: `Olá! Sou o atendente virtual da ${config.businessName || 'empresa'}. Como posso te ajudar hoje?`,
+        handoffTriggered: false,
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 9.2 Auto-generate Business Profile via AI with 1 Click (/api/generate-business-profile)
+app.post('/api/generate-business-profile', async (req, res) => {
+  try {
+    const { businessName, niche } = req.body || {};
+    if (!businessName || !niche) {
+      res.status(400).json({ error: 'Nome da empresa e nicho são obrigatórios.' });
+      return;
+    }
+
+    const prompt = `Crie um perfil completo de atendimento para WhatsApp de alta conversão para a seguinte empresa:
+Empresa: "${businessName}"
+Nicho: "${niche}"
+
+Gere as informações em formato JSON com:
+- personaName: Nome humanizado do atendente (ex: Sofia, Lucas, Samuel).
+- greeting: Mensagem de saudação acolhedora para WhatsApp.
+- quickReplies: Array com 4 botões de opções mais frequentes desse nicho.
+- knowledgeBase: Base de conhecimento detalhada com produtos, serviços, preços/valores médios, formas de pagamento e diferenciais.
+- humanTransferKeywords: Array de palavras que devem transferir para atendente humano.
+- customInstructions: Regras de abordagem, tom de voz e objeções frequentes.`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              personaName: { type: Type.STRING },
+              greeting: { type: Type.STRING },
+              quickReplies: { type: Type.ARRAY, items: { type: Type.STRING } },
+              knowledgeBase: { type: Type.STRING },
+              humanTransferKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+              customInstructions: { type: Type.STRING },
+            },
+            required: ['personaName', 'greeting', 'quickReplies', 'knowledgeBase', 'humanTransferKeywords', 'customInstructions'],
+          },
+        },
+      });
+
+      const parsed = JSON.parse(response.text?.trim() || '{}');
+      res.json(parsed);
+    } catch (genErr: any) {
+      console.warn('Fallback para /api/generate-business-profile:', genErr?.message);
+      res.json({
+        personaName: 'Atendente Virtual',
+        greeting: `Olá! Bem-vindo(a) à ${businessName}! 😊 Como posso te ajudar hoje?`,
+        quickReplies: ['Conhecer serviços', 'Valores e orçamentos', 'Horários de atendimento', 'Falar com atendente'],
+        knowledgeBase: `A ${businessName} é referência no segmento de ${niche}. Oferecemos soluções completas, atendimento ágil e condições facilitadas de pagamento via Pix e cartão de crédito.`,
+        humanTransferKeywords: ['humano', 'atendente', 'falar com atendente', 'suporte', 'gerente'],
+        customInstructions: 'Atenda com simpatia, naturalidade, respostas diretas e use emojis com carinho.',
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // BROADCAST / DISPARO EM MASSA DE LISTA DE MENSAGENS
 interface BroadcastLog {
   phone: string;
@@ -2938,7 +3075,7 @@ function formatPhoneToJid(rawPhone: string): string {
 }
 
 // 10. Start Broadcast to List
-app.post('/api/whatsapp/broadcast', async (req, res) => {
+app.post(['/api/whatsapp/broadcast', '/api/whatsapp/broadcast-start'], async (req, res) => {
   if (!sock || waState.status !== 'connected') {
     res.status(400).json({ error: 'WhatsApp não está conectado. Escaneie o QR Code primeiro.' });
     return;
@@ -3091,7 +3228,7 @@ app.post('/api/whatsapp/broadcast-cancel', (_req, res) => {
 });
 
 // 13. Send Single Initial Message to a New Number
-app.post('/api/whatsapp/send-single', async (req, res) => {
+app.post(['/api/whatsapp/send-single', '/api/whatsapp/send-first-message'], async (req, res) => {
   if (!sock || waState.status !== 'connected') {
     res.status(400).json({ error: 'WhatsApp não está conectado.' });
     return;
