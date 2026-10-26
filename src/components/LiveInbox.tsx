@@ -987,8 +987,17 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
                       ) : (
                         thread.name.charAt(0).toUpperCase()
                       )}
+                      <img
+                        src={`/api/whatsapp/profile-picture?jid=${encodeURIComponent(thread.jid)}`}
+                        alt={`Foto de ${thread.name}`}
+                        loading="lazy"
+                        className="absolute inset-0 w-full h-full rounded-full object-cover bg-[#111b21]"
+                        onError={(event) => {
+                          event.currentTarget.style.display = 'none';
+                        }}
+                      />
                       <span
-                        className={`w-2.5 h-2.5 rounded-full absolute -bottom-0.5 -right-0.5 border-2 border-[#0b1220] ${badge.dot}`}
+                        className={`w-2.5 h-2.5 rounded-full absolute -bottom-0.5 -right-0.5 border-2 border-[#0b1220] z-10 ${badge.dot}`}
                       />
                     </div>
 
@@ -1067,7 +1076,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
               <div className="bg-[#111b21] border-b border-[#222d34] text-white px-4 py-3 flex items-center justify-between shadow-md z-10 flex-wrap gap-2 shrink-0">
                 <div className="flex items-center gap-3">
                   <div
-                    className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm border ${
+                    className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm border relative overflow-hidden shrink-0 ${
                       activeThread.jid.endsWith('@g.us')
                         ? 'bg-indigo-600/30 border-indigo-400/50 text-indigo-200'
                         : 'bg-blue-600/30 border-blue-400/50 text-blue-200'
@@ -1078,6 +1087,15 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
                     ) : (
                       activeThread.name.charAt(0).toUpperCase()
                     )}
+                    <img
+                      key={activeThread.jid}
+                      src={`/api/whatsapp/profile-picture?jid=${encodeURIComponent(activeThread.jid)}`}
+                      alt={`Foto de ${activeThread.name}`}
+                      className="absolute inset-0 w-full h-full rounded-full object-cover bg-[#111b21]"
+                      onError={(event) => {
+                        event.currentTarget.style.display = 'none';
+                      }}
+                    />
                   </div>
                   <div>
                     <h3 className="font-semibold text-sm leading-tight text-white flex items-center gap-2 flex-wrap">

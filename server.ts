@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { randomUUID, timingSafeEqual } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
@@ -78,6 +78,8 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 const MEDIA_DIR = path.join(DATA_DIR, 'media');
 fs.mkdirSync(MEDIA_DIR, { recursive: true, mode: 0o700 });
+const PROFILE_PICTURES_DIR = path.join(DATA_DIR, 'profile_pictures');
+fs.mkdirSync(PROFILE_PICTURES_DIR, { recursive: true, mode: 0o700 });
 
 function atomicWriteJson(filePath: string, data: unknown) {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -111,6 +113,55 @@ function saveImageMedia(buffer: Buffer, mimeType = 'image/jpeg'): string {
   fs.renameSync(temporaryPath, finalPath);
   fs.chmodSync(finalPath, 0o600);
   return `/api/whatsapp/media/${filename}`;
+}
+
+const profilePictureDownloads = new Map<string, Promise<string | null>>();
+
+function getProfilePicturePath(jid: string): string {
+  const filename = `${createHash('sha256').update(jid).digest('hex')}.jpg`;
+  return path.join(PROFILE_PICTURES_DIR, filename);
+}
+
+async function ensureProfilePicture(jid: string): Promise<string | null> {
+  const cachedPath = getProfilePicturePath(jid);
+  if (fs.existsSync(cachedPath)) {
+    const cacheAge = Date.now() - fs.statSync(cachedPath).mtimeMs;
+    if (cacheAge < 24 * 60 * 60 * 1000) return cachedPath;
+  }
+  if (!sock || waState.status !== 'connected') return null;
+
+  const pendingDownload = profilePictureDownloads.get(jid);
+  if (pendingDownload) return pendingDownload;
+
+  const download = (async () => {
+    try {
+      const remoteUrl = await sock?.profilePictureUrl(jid, 'image', 12_000);
+      if (!remoteUrl) return fs.existsSync(cachedPath) ? cachedPath : null;
+
+      const response = await fetch(remoteUrl, { signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) return fs.existsSync(cachedPath) ? cachedPath : null;
+      const contentLength = Number(response.headers.get('content-length')) || 0;
+      if (contentLength > 5 * 1024 * 1024) return fs.existsSync(cachedPath) ? cachedPath : null;
+
+      const imageBuffer = Buffer.from(await response.arrayBuffer());
+      if (!imageBuffer.length || imageBuffer.length > 5 * 1024 * 1024) {
+        return fs.existsSync(cachedPath) ? cachedPath : null;
+      }
+
+      const temporaryPath = `${cachedPath}.${process.pid}.tmp`;
+      fs.writeFileSync(temporaryPath, imageBuffer, { mode: 0o600 });
+      fs.renameSync(temporaryPath, cachedPath);
+      fs.chmodSync(cachedPath, 0o600);
+      return cachedPath;
+    } catch {
+      return fs.existsSync(cachedPath) ? cachedPath : null;
+    } finally {
+      profilePictureDownloads.delete(jid);
+    }
+  })();
+
+  profilePictureDownloads.set(jid, download);
+  return download;
 }
 
 // Path to store WhatsApp credentials outside the application checkout.
@@ -461,6 +512,27 @@ export interface ChatThread {
   leadFormContext?: LeadFormContext;
 }
 
+function isGenericContactName(name: string | undefined, jid: string): boolean {
+  if (!name) return true;
+  const phone = jid.split('@')[0];
+  const normalizedName = name.trim().replace(/^\+/, '');
+  return (
+    normalizedName === phone ||
+    name.startsWith('+') ||
+    name === 'Contato WhatsApp' ||
+    name === 'Grupo WhatsApp'
+  );
+}
+
+function updateThreadDisplayName(jid: string, candidateName: string | undefined) {
+  const name = candidateName?.trim();
+  if (!name || isGenericContactName(name, jid)) return;
+  const thread = chatThreads.get(jid);
+  if (thread && isGenericContactName(thread.name, jid)) {
+    thread.name = name;
+  }
+}
+
 function getThreadLastActivity(thread: ChatThread): number {
   if (Number.isFinite(thread.lastMessageAt)) return thread.lastMessageAt as number;
 
@@ -806,6 +878,10 @@ function saveLeadForms(entries: LeadFormEntry[]) {
 // Real WhatsApp Chat Threads & Contacts (persisted on disk, strictly populated by connected WhatsApp)
 const chatThreads: Map<string, ChatThread> = loadSavedWhatsAppChats();
 const knownContacts: Map<string, { name?: string; notify?: string; phone: string }> = loadSavedWhatsAppContacts();
+
+for (const [jid, contact] of knownContacts) {
+  updateThreadDisplayName(jid, contact.name || contact.notify);
+}
 
 // =========================================================================
 // RESPONDEFORME AI - MULTIMODAL FORM PRINT EXTRACTION & DISPATCH
@@ -1561,6 +1637,10 @@ async function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
     chatThreads.set(remoteJid, thread);
   }
 
+  if (!fromMe && !remoteJid.endsWith('@g.us')) {
+    updateThreadDisplayName(remoteJid, senderName);
+  }
+
   const msgId = msg.key?.id || `msg-${data.timestampMs}-${Math.random().toString(36).substring(2, 7)}`;
   const alreadyExists = thread.messages.some((m) => m.id === msgId);
   const existingMessage = thread.messages.find((message) => message.id === msgId);
@@ -1727,10 +1807,7 @@ async function startWhatsApp() {
         const name = contact.name || contact.notify || contact.verifiedName || `+${phone}`;
         knownContacts.set(contact.id, { name, notify: contact.notify, phone });
 
-        const thread = chatThreads.get(contact.id);
-        if (thread && (!thread.name || thread.name.startsWith('+'))) {
-          thread.name = name;
-        }
+        updateThreadDisplayName(contact.id, name);
       }
       saveWhatsAppContacts();
       saveWhatsAppChats();
@@ -1743,8 +1820,10 @@ async function startWhatsApp() {
           const phone = contact.id.split('@')[0];
           const name = contact.name || contact.notify || contact.verifiedName || `+${phone}`;
           knownContacts.set(contact.id, { name, notify: contact.notify, phone });
+          updateThreadDisplayName(contact.id, name);
         }
         saveWhatsAppContacts();
+        saveWhatsAppChats();
       }
     });
 
@@ -1756,8 +1835,7 @@ async function startWhatsApp() {
           const existing = knownContacts.get(u.id);
           const name = u.name || u.notify || u.verifiedName || existing?.name || `+${phone}`;
           knownContacts.set(u.id, { name, notify: u.notify || existing?.notify, phone });
-          const thread = chatThreads.get(u.id);
-          if (thread && name) thread.name = name;
+          updateThreadDisplayName(u.id, name);
         }
         saveWhatsAppContacts();
         saveWhatsAppChats();
@@ -1768,8 +1846,8 @@ async function startWhatsApp() {
     sock.ev.on('chats.upsert', (newChats) => {
       for (const chat of newChats) {
         if (!chat.id || chat.id === 'status@broadcast') continue;
+        const contact = knownContacts.get(chat.id);
         if (!chatThreads.has(chat.id)) {
-          const contact = knownContacts.get(chat.id);
           const phone = chat.id.split('@')[0];
           const name = contact?.name || chat.name || (chat.id.endsWith('@g.us') ? 'Grupo WhatsApp' : `+${phone}`);
           chatThreads.set(chat.id, {
@@ -1785,8 +1863,10 @@ async function startWhatsApp() {
         } else {
           const thread = chatThreads.get(chat.id)!;
           thread.unreadCount = Math.max(thread.unreadCount, Number(chat.unreadCount) || 0);
-          if (chat.name && (!thread.name || thread.name.startsWith('+'))) {
+          if (chat.id.endsWith('@g.us') && chat.name) {
             thread.name = chat.name;
+          } else {
+            updateThreadDisplayName(chat.id, contact?.name || chat.name || undefined);
           }
         }
       }
@@ -1801,6 +1881,7 @@ async function startWhatsApp() {
           const phone = c.id.split('@')[0];
           const name = c.name || c.notify || c.verifiedName || `+${phone}`;
           knownContacts.set(c.id, { name, notify: c.notify, phone });
+          updateThreadDisplayName(c.id, name);
         }
       }
       if (chats) {
@@ -1823,6 +1904,11 @@ async function startWhatsApp() {
           } else {
             const thread = chatThreads.get(c.id)!;
             thread.unreadCount = Math.max(thread.unreadCount, Number(c.unreadCount) || 0);
+            if (c.id.endsWith('@g.us') && c.name) {
+              thread.name = c.name;
+            } else {
+              updateThreadDisplayName(c.id, contact?.name || c.name || undefined);
+            }
           }
         }
       }
@@ -2095,6 +2181,10 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
       botPausedForThisChat: false,
     };
     chatThreads.set(remoteJid, thread);
+  }
+
+  if (!isFromMe && !isGroup) {
+    updateThreadDisplayName(remoteJid, senderName);
   }
 
   thread.lastMessage = text;
@@ -2491,6 +2581,25 @@ app.get('/api/whatsapp/media/:filename', (req, res) => {
 
   res.setHeader('Cache-Control', 'private, max-age=86400');
   res.sendFile(mediaPath);
+});
+
+app.get('/api/whatsapp/profile-picture', async (req, res) => {
+  const jid = typeof req.query.jid === 'string' ? req.query.jid : '';
+  if (!jid || (!chatThreads.has(jid) && !knownContacts.has(jid))) {
+    res.status(404).end();
+    return;
+  }
+
+  const picturePath = await ensureProfilePicture(jid);
+  if (!picturePath) {
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.status(404).end();
+    return;
+  }
+
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.type('image/jpeg');
+  res.sendFile(picturePath);
 });
 
 // 1. Get WhatsApp Status & QR Code
