@@ -76,6 +76,8 @@ app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+const MEDIA_DIR = path.join(DATA_DIR, 'media');
+fs.mkdirSync(MEDIA_DIR, { recursive: true, mode: 0o700 });
 
 function atomicWriteJson(filePath: string, data: unknown) {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -91,6 +93,24 @@ function atomicWriteJson(filePath: string, data: unknown) {
     } catch {}
     throw err;
   }
+}
+
+function saveImageMedia(buffer: Buffer, mimeType = 'image/jpeg'): string {
+  const extensionByMimeType: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  };
+  const extension = extensionByMimeType[mimeType.toLowerCase()] || 'jpg';
+  const filename = `${randomUUID()}.${extension}`;
+  const finalPath = path.join(MEDIA_DIR, filename);
+  const temporaryPath = `${finalPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, buffer, { mode: 0o600 });
+  fs.renameSync(temporaryPath, finalPath);
+  fs.chmodSync(finalPath, 0o600);
+  return `/api/whatsapp/media/${filename}`;
 }
 
 // Path to store WhatsApp credentials outside the application checkout.
@@ -380,6 +400,9 @@ export interface LiveLogMessage {
   text: string;
   timestamp: string;
   timestampMs?: number;
+  mediaType?: 'image';
+  mediaUrl?: string;
+  mediaMimeType?: string;
   isAiResponse?: boolean;
   isAudio?: boolean;
   reaction?: string;
@@ -1463,8 +1486,8 @@ function extractMessageData(msg: proto.IWebMessageInfo): {
       text = m.conversation;
     } else if (m.extendedTextMessage?.text) {
       text = m.extendedTextMessage.text;
-    } else if (m.imageMessage?.caption) {
-      text = m.imageMessage.caption;
+    } else if (m.imageMessage) {
+      text = m.imageMessage.caption || '📷 Foto';
     } else if (m.videoMessage?.caption) {
       text = m.videoMessage.caption;
     } else if (m.audioMessage) {
@@ -1515,7 +1538,7 @@ function extractMessageData(msg: proto.IWebMessageInfo): {
 }
 
 // Record a historical or synced message into chatThreads
-function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
+async function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
   const data = extractMessageData(msg);
   if (!data) return;
 
@@ -1540,6 +1563,20 @@ function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
 
   const msgId = msg.key?.id || `msg-${data.timestampMs}-${Math.random().toString(36).substring(2, 7)}`;
   const alreadyExists = thread.messages.some((m) => m.id === msgId);
+  const existingMessage = thread.messages.find((message) => message.id === msgId);
+  let mediaUrl = existingMessage?.mediaUrl;
+  const imageMessage = msg.message?.imageMessage;
+  const mediaMimeType = imageMessage?.mimetype || 'image/jpeg';
+
+  if (imageMessage && !mediaUrl) {
+    try {
+      const imageBuffer = await downloadMediaMessage(msg as any, 'buffer', {});
+      mediaUrl = saveImageMedia(imageBuffer as Buffer, mediaMimeType);
+    } catch (mediaError) {
+      console.warn(`Não foi possível baixar uma foto histórica de ${remoteJid}:`, mediaError);
+    }
+  }
+
   if (!alreadyExists) {
     const liveMsg: LiveLogMessage = {
       id: msgId,
@@ -1550,6 +1587,9 @@ function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
       timestamp,
       timestampMs,
       isAudio,
+      mediaType: imageMessage ? 'image' : undefined,
+      mediaUrl,
+      mediaMimeType: imageMessage ? mediaMimeType : undefined,
     };
     thread.messages.push(liveMsg);
     if (thread.messages.length > 50) {
@@ -1557,9 +1597,13 @@ function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
     }
   }
 
-  const existingMessage = thread.messages.find((message) => message.id === msgId);
   if (existingMessage && !existingMessage.timestampMs) {
     existingMessage.timestampMs = timestampMs;
+  }
+  if (existingMessage && imageMessage && mediaUrl) {
+    existingMessage.mediaType = 'image';
+    existingMessage.mediaUrl = mediaUrl;
+    existingMessage.mediaMimeType = mediaMimeType;
   }
   thread.messages.sort(
     (a, b) => (Number(a.timestampMs) || 0) - (Number(b.timestampMs) || 0)
@@ -1749,7 +1793,7 @@ async function startWhatsApp() {
       saveWhatsAppChats();
     });
 
-    sock.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
+    sock.ev.on('messaging-history.set', async ({ chats, contacts, messages }) => {
       console.log(`📥 Histórico completo do WhatsApp sincronizado: ${chats?.length || 0} conversas, ${contacts?.length || 0} contatos, ${messages?.length || 0} mensagens.`);
       if (contacts) {
         for (const c of contacts) {
@@ -1785,7 +1829,7 @@ async function startWhatsApp() {
       if (messages && Array.isArray(messages)) {
         for (const msg of messages) {
           try {
-            recordHistoricalMessage(msg);
+            await recordHistoricalMessage(msg);
           } catch (mErr) {
             console.warn('Erro ao processar mensagem do histórico:', mErr);
           }
@@ -1892,7 +1936,7 @@ async function startWhatsApp() {
           const isOlder = Date.now() - msgTimestamp > 120000;
 
           if (type === 'append' || isOlder) {
-            recordHistoricalMessage(msg);
+            await recordHistoricalMessage(msg);
           } else {
             await handleIncomingMessage(msg);
           }
@@ -1968,12 +2012,13 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
 
   const imageMessage = messageContent.imageMessage;
   const isImage = Boolean(imageMessage);
+  let imageMediaUrl: string | undefined;
+  const imageMimeType = imageMessage?.mimetype || 'image/jpeg';
 
   // Check if this image is a form print sent by operator or with caption trigger
   if (isImage && imageMessage) {
     const caption = (imageMessage.caption || '').trim();
     const isFormTrigger =
-      isFromMe ||
       caption.toLowerCase().includes('#lead') ||
       caption.toLowerCase().includes('#triagem') ||
       caption.toLowerCase().includes('#form') ||
@@ -2013,6 +2058,16 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
       } catch (err: any) {
         console.error('Erro ao processar imagem de lead no WhatsApp:', err);
       }
+    }
+  }
+
+  if (isImage && imageMessage) {
+    text = text || imageMessage.caption || '📷 Foto';
+    try {
+      const imageBuffer = await downloadMediaMessage(msg as any, 'buffer', {});
+      imageMediaUrl = saveImageMedia(imageBuffer as Buffer, imageMimeType);
+    } catch (mediaError) {
+      console.warn(`Não foi possível baixar a foto recebida de ${remoteJid}:`, mediaError);
     }
   }
 
@@ -2059,6 +2114,9 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
     timestamp,
     timestampMs,
     isAudio,
+    mediaType: isImage ? 'image' : undefined,
+    mediaUrl: imageMediaUrl,
+    mediaMimeType: isImage ? imageMimeType : undefined,
   };
 
   thread.messages.push(logMessage);
@@ -2417,6 +2475,23 @@ GATILHO E ESTRUTURA DO SCRIPT DE ATENDIMENTO DO SAMUEL:
 }
 
 // REST API ENDPOINTS
+
+app.get('/api/whatsapp/media/:filename', (req, res) => {
+  const filename = req.params.filename;
+  if (!filename || path.basename(filename) !== filename || !/^[a-f0-9-]+\.(jpg|png|webp|gif)$/i.test(filename)) {
+    res.status(400).json({ error: 'Arquivo de mídia inválido.' });
+    return;
+  }
+
+  const mediaPath = path.join(MEDIA_DIR, filename);
+  if (!fs.existsSync(mediaPath)) {
+    res.status(404).json({ error: 'Mídia não encontrada.' });
+    return;
+  }
+
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.sendFile(mediaPath);
+});
 
 // 1. Get WhatsApp Status & QR Code
 app.get('/api/whatsapp/status', (_req, res) => {

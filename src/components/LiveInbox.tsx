@@ -53,6 +53,9 @@ interface LiveMessage {
   text: string;
   timestamp: string;
   timestampMs?: number;
+  mediaType?: 'image';
+  mediaUrl?: string;
+  mediaMimeType?: string;
   isAiResponse?: boolean;
   isAudio?: boolean;
   reaction?: string;
@@ -97,6 +100,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
   const [selectedJid, setSelectedJid] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [sentimentFilter, setSentimentFilter] = useState<'all' | SentimentType>('all');
@@ -227,6 +231,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
     if (!replyText.trim() || !selectedJid || isSending) return;
 
     setIsSending(true);
+    setSendError(null);
     try {
       const res = await fetch('/api/whatsapp/send-message', {
         method: 'POST',
@@ -241,10 +246,12 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
         setReplyText('');
         fetchChats();
       } else {
-        alert('Não foi possível enviar a mensagem. Verifique se o WhatsApp está conectado.');
+        const data = await res.json().catch(() => ({}));
+        setSendError(data.error || 'Não foi possível enviar a mensagem.');
       }
     } catch (err) {
       console.error(err);
+      setSendError('Erro de comunicação com o servidor ao enviar a mensagem.');
     } finally {
       setIsSending(false);
     }
@@ -807,9 +814,9 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
       )}
 
       {/* Main Inbox Interface */}
-      <div className="bg-[#0e1628] border border-[#1a263d] rounded-3xl shadow-2xl overflow-hidden grid grid-cols-1 md:grid-cols-12 h-[760px]">
+      <div className="bg-[#0e1628] border border-[#1a263d] rounded-3xl shadow-2xl overflow-hidden grid grid-cols-1 md:grid-cols-12 md:h-[760px] md:min-h-[600px]">
         {/* Left list of chats */}
-        <div className="md:col-span-4 border-r border-[#1a263d] flex flex-col h-full bg-[#0b1220]">
+        <div className="md:col-span-4 border-r border-[#1a263d] flex flex-col h-[420px] md:h-full min-h-0 overflow-hidden bg-[#0b1220]">
           {/* Search Contacts in Left Panel */}
           <div className="p-3 border-b border-[#1a263d] bg-[#0e1628] space-y-2.5">
             <div className="relative flex items-center bg-[#070b14] border border-[#1e293b] rounded-xl px-3 py-2 focus-within:border-blue-500/60 transition">
@@ -911,7 +918,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
           </div>
 
           {/* Conversation List */}
-          <div className="flex-1 overflow-y-auto divide-y divide-[#131d33]">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain divide-y divide-[#131d33]">
             {filteredThreads.length === 0 ? (
               <div className="p-8 text-center text-[#64748b] space-y-4">
                 <div className="w-12 h-12 rounded-2xl bg-[#101b33] border border-blue-500/30 text-blue-400 flex items-center justify-center mx-auto">
@@ -1053,11 +1060,11 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
         </div>
 
         {/* Right chat message view with WhatsApp authentic Dark Theme */}
-        <div className="md:col-span-8 flex flex-col h-full bg-[#0c1317] relative">
+        <div className="md:col-span-8 flex flex-col h-[680px] md:h-full min-h-0 overflow-hidden bg-[#0c1317] relative">
           {activeThread ? (
             <>
               {/* Header */}
-              <div className="bg-[#111b21] border-b border-[#222d34] text-white px-4 py-3 flex items-center justify-between shadow-md z-10 flex-wrap gap-2">
+              <div className="bg-[#111b21] border-b border-[#222d34] text-white px-4 py-3 flex items-center justify-between shadow-md z-10 flex-wrap gap-2 shrink-0">
                 <div className="flex items-center gap-3">
                   <div
                     className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm border ${
@@ -1145,7 +1152,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
 
               {/* 📋 RESPONDEFORME AI FORM TRIAGE STRIP */}
               {activeThread.leadFormContext && (
-                <div className="bg-[#0b1324] border-b border-[#1a2942] px-4 py-2.5 flex items-center justify-between text-xs text-slate-300">
+                <div className="bg-[#0b1324] border-b border-[#1a2942] px-4 py-2.5 flex items-center justify-between text-xs text-slate-300 shrink-0">
                   <div className="flex items-center gap-2 overflow-hidden">
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-900/60 text-blue-300 border border-blue-500/40 shrink-0">
                       📋 RespondeForm AI
@@ -1165,7 +1172,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
               {/* 🎯 AI SENTIMENT DIAGNOSTIC STRIP ON ACTIVE CHAT */}
               {activeThread.sentiment && (
                 <div
-                  className={`px-4 py-2.5 border-b text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner ${
+                  className={`px-4 py-2.5 border-b text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner shrink-0 ${
                     activeThread.sentiment.sentiment === 'Insatisfeito'
                       ? 'bg-[#220d14] border-rose-500/40 text-rose-200'
                       : activeThread.sentiment.sentiment === 'Satisfeito'
@@ -1215,7 +1222,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
 
               {/* Chat Messages Body */}
               <div
-                className="flex-1 p-4 overflow-y-auto space-y-3 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:20px_20px]"
+                className="flex-1 min-h-0 p-4 overflow-y-auto overscroll-contain space-y-3 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:20px_20px]"
                 style={{ backgroundColor: '#0b141a' }}
               >
                 {activeThread.messages.length === 0 ? (
@@ -1255,7 +1262,29 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
                           </div>
 
                           {/* Audio Voice Note Bubble Preview */}
-                          {isAudio ? (
+                          {msg.mediaType === 'image' ? (
+                            <div className="space-y-2">
+                              {msg.mediaUrl ? (
+                                <a href={msg.mediaUrl} target="_blank" rel="noreferrer" className="block">
+                                  <img
+                                    src={msg.mediaUrl}
+                                    alt={msg.text || 'Foto recebida pelo WhatsApp'}
+                                    loading="lazy"
+                                    className="max-h-80 w-auto max-w-full rounded-xl object-contain bg-black/20 hover:opacity-95 transition"
+                                  />
+                                </a>
+                              ) : (
+                                <div className="min-h-32 min-w-48 rounded-xl border border-white/10 bg-black/25 flex items-center justify-center px-4 text-xs text-[#8696a0]">
+                                  📷 Foto indisponível no histórico antigo
+                                </div>
+                              )}
+                              {msg.text && msg.text !== '📷 Foto' && (
+                                <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-[#e9edef]">
+                                  {msg.text}
+                                </div>
+                              )}
+                            </div>
+                          ) : isAudio ? (
                             <div className="space-y-1.5 py-1">
                               <div className="flex items-center gap-3 bg-black/25 p-2 rounded-xl border border-white/5">
                                 <button
@@ -1326,22 +1355,30 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
               </div>
 
               {/* Manual reply bar in dark style */}
-              <div className="bg-[#111b21] p-3 border-t border-[#222d34]">
+              <div className="bg-[#111b21] p-3 border-t border-[#222d34] shrink-0 z-10">
+                {sendError && (
+                  <div className="mb-2 rounded-lg border border-rose-500/40 bg-rose-950/50 px-3 py-2 text-xs text-rose-200">
+                    {sendError}
+                  </div>
+                )}
                 <form onSubmit={handleSendManualMessage} className="flex items-center gap-2">
                   <input
                     type="text"
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
+                    disabled={!isWaConnected || isSending}
                     placeholder={
-                      activeThread.botPausedForThisChat
+                      !isWaConnected
+                        ? 'WhatsApp desconectado — reconecte para responder.'
+                        : activeThread.botPausedForThisChat
                         ? 'Digite para responder diretamente ao cliente no WhatsApp (IA pausada)...'
                         : 'Digite para responder manualmente a este cliente no WhatsApp...'
                     }
-                    className="flex-1 bg-[#202c33] text-white text-sm rounded-xl px-4 py-2.5 border border-[#2a3942] focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 placeholder-[#8696a0]"
+                    className="flex-1 bg-[#202c33] text-white text-sm rounded-xl px-4 py-2.5 border border-[#2a3942] focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 placeholder-[#8696a0] disabled:opacity-60"
                   />
                   <button
                     type="submit"
-                    disabled={isSending || !replyText.trim()}
+                    disabled={!isWaConnected || isSending || !replyText.trim()}
                     className="w-10 h-10 rounded-xl bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center transition shadow-lg shadow-blue-600/30 cursor-pointer disabled:opacity-40 shrink-0"
                     title="Enviar resposta manual"
                   >
