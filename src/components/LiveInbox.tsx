@@ -376,8 +376,28 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
     }
   };
 
-  // Filtered threads calculation
-  const filteredThreads = threads
+  const placeholderMessages = [
+    'Contato sincronizado da agenda',
+    'Conversa sincronizada do WhatsApp',
+    'Histórico sincronizado',
+  ];
+  const conversationThreads = threads.filter(
+    (thread) =>
+      thread.messages.length > 0 ||
+      thread.unreadCount > 0 ||
+      Boolean(thread.lastMessageAt) ||
+      (Boolean(thread.lastMessage) &&
+        !placeholderMessages.includes(thread.lastMessage) &&
+        !thread.lastMessage.startsWith('Grupo com '))
+  );
+
+  const getLegacyTimeOfDay = (thread: ChatThread) => {
+    const match = /^(\d{1,2}):(\d{2})/.exec(thread.lastTimestamp || '');
+    return match ? Number(match[1]) * 60 + Number(match[2]) : 0;
+  };
+
+  // Keep the list WhatsApp-like: active conversations only, unread first, newest next.
+  const filteredThreads = conversationThreads
     .filter((t) => {
       const isGroup = t.jid.endsWith('@g.us');
       if (typeFilter === 'direct' && isGroup) return false;
@@ -398,6 +418,12 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
 
       const activityDifference = (b.lastMessageAt || 0) - (a.lastMessageAt || 0);
       if (activityDifference !== 0) return activityDifference;
+
+      const messageDifference = Number(b.messages.length > 0) - Number(a.messages.length > 0);
+      if (messageDifference !== 0) return messageDifference;
+
+      const legacyTimeDifference = getLegacyTimeOfDay(b) - getLegacyTimeOfDay(a);
+      if (legacyTimeDifference !== 0) return legacyTimeDifference;
 
       return a.name.localeCompare(b.name, 'pt-BR');
     });
@@ -466,8 +492,8 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
   const satisfiedTotal = threads.filter((t) => t.sentiment?.sentiment === 'Satisfeito').length;
   const neutralTotal = threads.filter((t) => t.sentiment?.sentiment === 'Neutro').length;
   const dissatisfiedTotal = threads.filter((t) => t.sentiment?.sentiment === 'Insatisfeito').length;
-  const directCount = threads.filter((t) => !t.jid.endsWith('@g.us')).length;
-  const groupCount = threads.filter((t) => t.jid.endsWith('@g.us')).length;
+  const directCount = conversationThreads.filter((t) => !t.jid.endsWith('@g.us')).length;
+  const groupCount = conversationThreads.filter((t) => t.jid.endsWith('@g.us')).length;
 
   return (
     <div className="max-w-[1700px] mx-auto px-4 sm:px-6 py-6 space-y-6">
@@ -815,7 +841,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
                     : 'text-[#94a3b8] hover:text-white hover:bg-[#131d33]'
                 }`}
               >
-                Todos ({threads.length})
+                Todos ({conversationThreads.length})
               </button>
               <button
                 onClick={() => setTypeFilter('direct')}
@@ -894,7 +920,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
                 <div>
                   <h4 className="text-sm font-bold text-white">Nenhum contato encontrado</h4>
                   <p className="text-xs leading-relaxed text-[#94a3b8] mt-1 max-w-xs mx-auto">
-                    {threads.length === 0
+                    {conversationThreads.length === 0
                       ? 'Nenhuma conversa ativa no momento. Sincronize com seu WhatsApp ou inicie um novo contato.'
                       : 'Nenhuma conversa corresponde aos filtros selecionados.'}
                   </p>

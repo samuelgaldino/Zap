@@ -447,6 +447,12 @@ function getThreadLastActivity(thread: ChatThread): number {
   );
 }
 
+function getLegacyTimeOfDay(thread: ChatThread): number {
+  const match = /^(\d{1,2}):(\d{2})/.exec(thread.lastTimestamp || '');
+  if (!match) return 0;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
 function compareChatThreads(a: ChatThread, b: ChatThread): number {
   const aUnread = a.unreadCount > 0 ? 1 : 0;
   const bUnread = b.unreadCount > 0 ? 1 : 0;
@@ -454,6 +460,12 @@ function compareChatThreads(a: ChatThread, b: ChatThread): number {
 
   const activityDifference = getThreadLastActivity(b) - getThreadLastActivity(a);
   if (activityDifference !== 0) return activityDifference;
+
+  const messageDifference = Number(b.messages.length > 0) - Number(a.messages.length > 0);
+  if (messageDifference !== 0) return messageDifference;
+
+  const legacyTimeDifference = getLegacyTimeOfDay(b) - getLegacyTimeOfDay(a);
+  if (legacyTimeDifference !== 0) return legacyTimeDifference;
 
   return a.name.localeCompare(b.name, 'pt-BR');
 }
