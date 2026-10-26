@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+data/
+whatsapp_auth/
+training_data.json
+whatsapp_chats.json
+whatsapp_contacts.json
+lead_forms.json
+*.backup.json

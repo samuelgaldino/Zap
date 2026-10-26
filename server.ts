@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import { randomUUID, timingSafeEqual } from 'crypto';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
@@ -22,23 +23,90 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || '';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+
+app.disable('x-powered-by');
+
+function secureEquals(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+
+  if (req.path === '/healthz') return next();
+  if (!IS_PRODUCTION) return next();
+
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+    res.status(503).send('Autenticação administrativa não configurada.');
+    return;
+  }
+
+  const authorization = req.headers.authorization || '';
+  if (!authorization.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="ArcoZapp", charset="UTF-8"');
+    res.status(401).send('Autenticação necessária.');
+    return;
+  }
+
+  try {
+    const decoded = Buffer.from(authorization.slice(6), 'base64').toString('utf8');
+    const separator = decoded.indexOf(':');
+    const username = separator >= 0 ? decoded.slice(0, separator) : '';
+    const password = separator >= 0 ? decoded.slice(separator + 1) : '';
+    if (secureEquals(username, ADMIN_USERNAME) && secureEquals(password, ADMIN_PASSWORD)) {
+      next();
+      return;
+    }
+  } catch {}
+
+  res.setHeader('WWW-Authenticate', 'Basic realm="ArcoZapp", charset="UTF-8"');
+  res.status(401).send('Credenciais inválidas.');
+});
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
-// Path to store WhatsApp credentials
-const AUTH_DIR = path.resolve(__dirname, 'whatsapp_auth');
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
+fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+
+function atomicWriteJson(filePath: string, data: unknown) {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(data, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+    fs.renameSync(temporaryPath, filePath);
+  } catch (err) {
+    try {
+      fs.rmSync(temporaryPath, { force: true });
+    } catch {}
+    throw err;
+  }
+}
+
+// Path to store WhatsApp credentials outside the application checkout.
+const AUTH_DIR = path.join(DATA_DIR, 'whatsapp_auth');
 if (!fs.existsSync(AUTH_DIR)) {
-  fs.mkdirSync(AUTH_DIR, { recursive: true });
+  fs.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
 }
 
 // Path to store training data
-const TRAINING_FILE = path.resolve(__dirname, 'training_data.json');
+const TRAINING_FILE = path.join(DATA_DIR, 'training_data.json');
 
 // Initialize GoogleGenAI
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
   httpOptions: {
+    timeout: 45_000,
     headers: {
       'User-Agent': 'aistudio-build',
     },
@@ -272,11 +340,7 @@ function loadTraining() {
 
 // Save training to disk
 function saveTraining(data: any) {
-  try {
-    fs.writeFileSync(TRAINING_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Erro ao salvar treinamento:', err);
-  }
+  atomicWriteJson(TRAINING_FILE, data);
 }
 
 let botTraining = loadTraining();
@@ -582,8 +646,8 @@ export interface ChatThread {
 ]; */
 
 // Paths to persist real WhatsApp chats and contacts data
-const CHATS_FILE = path.resolve(__dirname, 'whatsapp_chats.json');
-const CONTACTS_FILE = path.resolve(__dirname, 'whatsapp_contacts.json');
+const CHATS_FILE = path.join(DATA_DIR, 'whatsapp_chats.json');
+const CONTACTS_FILE = path.join(DATA_DIR, 'whatsapp_contacts.json');
 
 function loadSavedWhatsAppChats(): Map<string, ChatThread> {
   const map = new Map<string, ChatThread>();
@@ -608,7 +672,7 @@ function loadSavedWhatsAppChats(): Map<string, ChatThread> {
 function saveWhatsAppChats() {
   try {
     const list = Array.from(chatThreads.values());
-    fs.writeFileSync(CHATS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    atomicWriteJson(CHATS_FILE, list);
   } catch (err) {
     console.error('Erro ao persistir conversas do WhatsApp:', err);
   }
@@ -637,14 +701,14 @@ function loadSavedWhatsAppContacts(): Map<string, { name?: string; notify?: stri
 function saveWhatsAppContacts() {
   try {
     const list = Array.from(knownContacts.entries()).map(([id, val]) => ({ id, ...val }));
-    fs.writeFileSync(CONTACTS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    atomicWriteJson(CONTACTS_FILE, list);
   } catch (err) {
     console.error('Erro ao persistir contatos do WhatsApp:', err);
   }
 }
 
 // Path to persist Form Triage Leads (RespondeForme AI)
-const LEAD_FORMS_FILE = path.resolve(__dirname, 'lead_forms.json');
+const LEAD_FORMS_FILE = path.join(DATA_DIR, 'lead_forms.json');
 
 function loadLeadForms(): LeadFormEntry[] {
   try {
@@ -661,7 +725,7 @@ function loadLeadForms(): LeadFormEntry[] {
 
 function saveLeadForms(entries: LeadFormEntry[]) {
   try {
-    fs.writeFileSync(LEAD_FORMS_FILE, JSON.stringify(entries, null, 2), 'utf-8');
+    atomicWriteJson(LEAD_FORMS_FILE, entries);
   } catch (err) {
     console.error('Erro ao persistir leads de formulário:', err);
   }
@@ -1126,7 +1190,6 @@ Responda SOMENTE um objeto JSON estrito com o formato:
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
-        temperature: 0.2,
       },
     });
 
@@ -1692,7 +1755,8 @@ async function startWhatsApp() {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        const hasStoredSession = fs.existsSync(path.join(AUTH_DIR, 'creds.json'));
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut && hasStoredSession;
         console.log(`❌ Conexão WhatsApp encerrada. Código: ${statusCode}. Reconectar: ${shouldReconnect}`);
 
         waState.status = 'disconnected';
@@ -2161,7 +2225,6 @@ GATILHO E ESTRUTURA DO SCRIPT DE ATENDIMENTO DO SAMUEL:
         contents,
         config: {
           systemInstruction,
-          temperature: 0.7,
         },
       });
     } catch (err: any) {
@@ -2172,7 +2235,6 @@ GATILHO E ESTRUTURA DO SCRIPT DE ATENDIMENTO DO SAMUEL:
         contents,
         config: {
           systemInstruction,
-          temperature: 0.7,
         },
       });
     }
@@ -2568,8 +2630,8 @@ app.get('/api/whatsapp/training', (_req, res) => {
 app.post('/api/whatsapp/training', (req, res) => {
   try {
     const updated = { ...botTraining, ...req.body };
+    saveTraining(updated);
     botTraining = updated;
-    saveTraining(botTraining);
     res.json({ success: true, training: botTraining });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -2862,7 +2924,7 @@ E depois o texto normal da mensagem.
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: question || 'Olá, quais são os horários e serviços de vocês?',
-        config: { systemInstruction, temperature: 0.7 },
+        config: { systemInstruction },
       });
       rawText = response.text || 'Olá! Como posso te ajudar hoje? 😊';
       const reactionMatch = rawText.match(/\[REACAO:\s*([^\]]+)\]/i);
@@ -2953,7 +3015,6 @@ DIRETRIZES DE ESTILO:
         contents: chatContents,
         config: {
           systemInstruction,
-          temperature: 0.7,
         },
       });
 
@@ -3687,7 +3748,6 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido (sem tags markdown, sem blocos cod
       contents,
       config: {
         responseMimeType: 'application/json',
-        temperature: 0.2,
       },
     });
 
@@ -4327,7 +4387,19 @@ app.delete('/api/lead-form/:id', (req, res) => {
   }
 });
 
-startWhatsApp().catch((err) => console.error('Auto-start WA falhou:', err));
+app.get('/healthz', (_req, res) => {
+  res.json({
+    status: 'ok',
+    whatsapp: waState.status,
+    uptimeSeconds: Math.round(process.uptime()),
+  });
+});
+
+if (fs.existsSync(path.join(AUTH_DIR, 'creds.json'))) {
+  startWhatsApp().catch((err) => console.error('Auto-start WA falhou:', err));
+} else {
+  console.log('ℹ️ WhatsApp aguardando conexão manual pelo painel.');
+}
 
 // Start server and handle Vite integration
 async function startServer() {
@@ -4345,8 +4417,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
-    console.log(`🚀 ZapGemini Server rodando na porta ${PORT}`);
+  app.listen(Number(PORT), HOST, () => {
+    console.log(`🚀 ZapGemini Server rodando em ${HOST}:${PORT} (${IS_PRODUCTION ? 'produção' : 'desenvolvimento'})`);
   });
 }
 

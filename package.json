@@ -3,6 +3,15 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "pnpm@10.20.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@google/genai",
+      "@whiskeysockets/baileys",
+      "esbuild",
+      "protobufjs"
+    ]
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",

@@ -188,13 +188,16 @@ export const TrainingStudio: React.FC<TrainingStudioProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(training),
       });
-      if (res.ok) {
-        setSaveSuccess(true);
-        setTimeout(() => setSaveSuccess(false), 3000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success !== true) {
+        throw new Error(data.error || `Falha ao salvar treinamento (HTTP ${res.status}).`);
       }
-    } catch (err) {
+      if (data.training) setTraining(data.training);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err: any) {
       console.error(err);
-      alert('Erro ao salvar treinamento.');
+      alert(err?.message || 'Erro ao salvar treinamento.');
     } finally {
       setLoading(false);
     }
