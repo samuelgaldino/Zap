@@ -379,6 +379,7 @@ export interface LiveLogMessage {
   fromMe: boolean;
   text: string;
   timestamp: string;
+  timestampMs?: number;
   isAiResponse?: boolean;
   isAudio?: boolean;
   reaction?: string;
@@ -428,12 +429,42 @@ export interface ChatThread {
   name: string;
   lastMessage: string;
   lastTimestamp: string;
+  lastMessageAt?: number;
   unreadCount: number;
   messages: LiveLogMessage[];
   botPausedForThisChat?: boolean;
   notifiedOutOfHours?: boolean;
   sentiment?: SentimentAnalysis;
   leadFormContext?: LeadFormContext;
+}
+
+function getThreadLastActivity(thread: ChatThread): number {
+  if (Number.isFinite(thread.lastMessageAt)) return thread.lastMessageAt as number;
+
+  return thread.messages.reduce(
+    (latest, message) => Math.max(latest, Number(message.timestampMs) || 0),
+    0
+  );
+}
+
+function compareChatThreads(a: ChatThread, b: ChatThread): number {
+  const aUnread = a.unreadCount > 0 ? 1 : 0;
+  const bUnread = b.unreadCount > 0 ? 1 : 0;
+  if (aUnread !== bUnread) return bUnread - aUnread;
+
+  const activityDifference = getThreadLastActivity(b) - getThreadLastActivity(a);
+  if (activityDifference !== 0) return activityDifference;
+
+  return a.name.localeCompare(b.name, 'pt-BR');
+}
+
+function appendMessageToThread(thread: ChatThread, message: LiveLogMessage) {
+  const timestampMs = Number(message.timestampMs) || Date.now();
+  message.timestampMs = timestampMs;
+  thread.messages.push(message);
+  thread.lastMessage = message.text;
+  thread.lastTimestamp = message.timestamp;
+  thread.lastMessageAt = timestampMs;
 }
 
 /* DEPRECATED_SEEDS removed */
@@ -658,6 +689,12 @@ function loadSavedWhatsAppChats(): Map<string, ChatThread> {
       if (Array.isArray(list)) {
         for (const item of list) {
           if (item && item.jid) {
+            item.messages = Array.isArray(item.messages) ? item.messages : [];
+            item.unreadCount = Math.max(0, Number(item.unreadCount) || 0);
+            item.lastMessageAt = getThreadLastActivity(item);
+            item.messages.sort(
+              (a, b) => (Number(a.timestampMs) || 0) - (Number(b.timestampMs) || 0)
+            );
             map.set(item.jid, item);
           }
         }
@@ -671,7 +708,7 @@ function loadSavedWhatsAppChats(): Map<string, ChatThread> {
 
 function saveWhatsAppChats() {
   try {
-    const list = Array.from(chatThreads.values());
+    const list = Array.from(chatThreads.values()).sort(compareChatThreads);
     atomicWriteJson(CHATS_FILE, list);
   } catch (err) {
     console.error('Erro ao persistir conversas do WhatsApp:', err);
@@ -878,7 +915,7 @@ async function dispatchLeadForm(data: {
       await sock.sendMessage(jid, { text: messageToSend });
       await sock.sendPresenceUpdate('paused', jid);
 
-      thread.messages.push({
+      appendMessageToThread(thread, {
         id: `form-msg-${Date.now()}`,
         chatJid: jid,
         senderName: 'Você (RespondeForm AI)',
@@ -1470,7 +1507,7 @@ function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
   const data = extractMessageData(msg);
   if (!data) return;
 
-  const { remoteJid, senderName, fromMe, text, timestamp, isAudio } = data;
+  const { remoteJid, senderName, fromMe, text, timestamp, timestampMs, isAudio } = data;
   let thread = chatThreads.get(remoteJid);
   if (!thread) {
     const contact = knownContacts.get(remoteJid);
@@ -1481,6 +1518,7 @@ function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
       name,
       lastMessage: text,
       lastTimestamp: timestamp,
+      lastMessageAt: timestampMs,
       unreadCount: 0,
       messages: [],
       botPausedForThisChat: false,
@@ -1498,6 +1536,7 @@ function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
       fromMe,
       text,
       timestamp,
+      timestampMs,
       isAudio,
     };
     thread.messages.push(liveMsg);
@@ -1506,8 +1545,19 @@ function recordHistoricalMessage(msg: proto.IWebMessageInfo) {
     }
   }
 
-  thread.lastMessage = text || thread.lastMessage;
-  thread.lastTimestamp = timestamp || thread.lastTimestamp;
+  const existingMessage = thread.messages.find((message) => message.id === msgId);
+  if (existingMessage && !existingMessage.timestampMs) {
+    existingMessage.timestampMs = timestampMs;
+  }
+  thread.messages.sort(
+    (a, b) => (Number(a.timestampMs) || 0) - (Number(b.timestampMs) || 0)
+  );
+
+  if (timestampMs >= getThreadLastActivity(thread)) {
+    thread.lastMessage = text || thread.lastMessage;
+    thread.lastTimestamp = timestamp || thread.lastTimestamp;
+    thread.lastMessageAt = timestampMs;
+  }
 }
 
 // Synchronize all real WhatsApp contacts, participating groups, and active threads
@@ -1530,7 +1580,8 @@ async function syncRealWhatsAppContactsAndChats(): Promise<{
               jid: groupId,
               name: groupName,
               lastMessage: `Grupo com ${participantCount} participantes`,
-              lastTimestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+              lastTimestamp: '',
+              lastMessageAt: 0,
               unreadCount: 0,
               messages: [],
               botPausedForThisChat: false,
@@ -1553,7 +1604,8 @@ async function syncRealWhatsAppContactsAndChats(): Promise<{
             jid,
             name: contact.name || `+${contact.phone}`,
             lastMessage: 'Contato sincronizado da agenda',
-            lastTimestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+            lastTimestamp: '',
+            lastMessageAt: 0,
             unreadCount: 0,
             messages: [],
             botPausedForThisChat: false,
@@ -1575,7 +1627,7 @@ async function syncRealWhatsAppContactsAndChats(): Promise<{
     activeChats: chatThreads.size,
     totalContacts: knownContacts.size,
     totalMessages: totalMsgs,
-    threads: Array.from(chatThreads.values()),
+    threads: Array.from(chatThreads.values()).sort(compareChatThreads),
   };
 }
 
@@ -1668,13 +1720,15 @@ async function startWhatsApp() {
             jid: chat.id,
             name,
             lastMessage: 'Conversa sincronizada do WhatsApp',
-            lastTimestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+            lastTimestamp: '',
+            lastMessageAt: 0,
             unreadCount: chat.unreadCount || 0,
             messages: [],
             botPausedForThisChat: false,
           });
         } else {
           const thread = chatThreads.get(chat.id)!;
+          thread.unreadCount = Math.max(thread.unreadCount, Number(chat.unreadCount) || 0);
           if (chat.name && (!thread.name || thread.name.startsWith('+'))) {
             thread.name = chat.name;
           }
@@ -1704,11 +1758,15 @@ async function startWhatsApp() {
               jid: c.id,
               name,
               lastMessage: 'Histórico sincronizado',
-              lastTimestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+              lastTimestamp: '',
+              lastMessageAt: 0,
               unreadCount: c.unreadCount || 0,
               messages: [],
               botPausedForThisChat: false,
             });
+          } else {
+            const thread = chatThreads.get(c.id)!;
+            thread.unreadCount = Math.max(thread.unreadCount, Number(c.unreadCount) || 0);
           }
         }
       }
@@ -1948,7 +2006,13 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
 
   if (!text && !isAudio && !isImage) return;
 
-  const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const timestampMs =
+    typeof msg.messageTimestamp === 'number'
+      ? msg.messageTimestamp * 1000
+      : msg.messageTimestamp && typeof (msg.messageTimestamp as any).low === 'number'
+      ? (msg.messageTimestamp as any).low * 1000
+      : Date.now();
+  const timestamp = new Date(timestampMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   // Update in-memory chat thread
   let thread = chatThreads.get(remoteJid);
@@ -1958,6 +2022,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
       name: senderName,
       lastMessage: text,
       lastTimestamp: timestamp,
+      lastMessageAt: timestampMs,
       unreadCount: 0,
       messages: [],
       botPausedForThisChat: false,
@@ -1967,6 +2032,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
 
   thread.lastMessage = text;
   thread.lastTimestamp = timestamp;
+  thread.lastMessageAt = timestampMs;
   if (!isFromMe) {
     thread.unreadCount += 1;
     waState.stats.totalReceived += 1;
@@ -1979,6 +2045,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
     fromMe: Boolean(isFromMe),
     text: text,
     timestamp,
+    timestampMs,
     isAudio,
   };
 
@@ -2044,7 +2111,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
         await sock.sendMessage(remoteJid, { text: outOfHoursNotice });
         await sock.sendPresenceUpdate('paused', remoteJid);
 
-        thread.messages.push({
+        appendMessageToThread(thread, {
           id: `ai-${Date.now()}`,
           chatJid: remoteJid,
           senderName: `${botTraining.personaName} (Aviso de Expediente)`,
@@ -2089,7 +2156,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo) {
       await sock.sendMessage(remoteJid, { text: handoffNotice });
       await sock.sendPresenceUpdate('paused', remoteJid);
 
-      thread.messages.push({
+      appendMessageToThread(thread, {
         id: `ai-${Date.now()}`,
         chatJid: remoteJid,
         senderName: botTraining.personaName,
@@ -2304,7 +2371,7 @@ GATILHO E ESTRUTURA DO SCRIPT DE ATENDIMENTO DO SAMUEL:
     await sock.sendPresenceUpdate('paused', remoteJid);
 
     // Save in chat history
-    thread.messages.push({
+    appendMessageToThread(thread, {
       id: `ai-${Date.now()}`,
       chatJid: remoteJid,
       senderName: `${botTraining.personaName} (IA)`,
@@ -2396,12 +2463,7 @@ app.post('/api/whatsapp/toggle-autoreply', (req, res) => {
 
 // 5. Get Real WhatsApp Conversations (Inbox)
 app.get('/api/whatsapp/chats', (_req, res) => {
-  const threadsArray = Array.from(chatThreads.values()).sort(
-    (a, b) =>
-      (b.messages[b.messages.length - 1]?.id || '').localeCompare(
-        a.messages[a.messages.length - 1]?.id || ''
-      )
-  );
+  const threadsArray = Array.from(chatThreads.values()).sort(compareChatThreads);
 
   const satisfiedCount = threadsArray.filter(
     (t) => t.sentiment?.sentiment === 'Satisfeito'
@@ -2439,6 +2501,25 @@ app.get('/api/whatsapp/chats', (_req, res) => {
       alertCount: dissatisfiedCount,
     },
   });
+});
+
+// Mark a conversation as read when the operator opens it in the monitor.
+app.post('/api/whatsapp/mark-read', (req, res) => {
+  const { jid } = req.body || {};
+  if (!jid) {
+    res.status(400).json({ error: 'Conversa não informada.' });
+    return;
+  }
+
+  const thread = chatThreads.get(jid);
+  if (!thread) {
+    res.status(404).json({ error: 'Conversa não encontrada.' });
+    return;
+  }
+
+  thread.unreadCount = 0;
+  saveWhatsAppChats();
+  res.json({ success: true, jid, unreadCount: 0 });
 });
 
 // 5.1 Re-analyze Sentiment on demand with Gemini
@@ -2595,7 +2676,7 @@ app.post('/api/whatsapp/send-message', async (req, res) => {
 
     const thread = chatThreads.get(jid);
     if (thread) {
-      thread.messages.push({
+      appendMessageToThread(thread, {
         id: `manual-${Date.now()}`,
         chatJid: jid,
         senderName: 'Você (Manual)',
@@ -3240,7 +3321,7 @@ app.post(['/api/whatsapp/broadcast', '/api/whatsapp/broadcast-start'], async (re
           };
           chatThreads.set(jid, thread);
         }
-        thread.messages.push({
+        appendMessageToThread(thread, {
           id: `broadcast-${Date.now()}-${i}`,
           chatJid: jid,
           senderName: 'Você (Disparo)',
@@ -3331,7 +3412,7 @@ app.post(['/api/whatsapp/send-single', '/api/whatsapp/send-first-message'], asyn
       };
       chatThreads.set(jid, thread);
     }
-    thread.messages.push({
+    appendMessageToThread(thread, {
       id: `manual-first-${Date.now()}`,
       chatJid: jid,
       senderName: 'Você (Primeira Mensagem)',
@@ -3520,7 +3601,7 @@ app.post('/api/followup/queue/trigger', async (req, res) => {
         };
         chatThreads.set(contact.jid, thread);
       }
-      thread.messages.push({
+      appendMessageToThread(thread, {
         id: `fu-${Date.now()}`,
         chatJid: contact.jid,
         senderName: 'Você (Follow-Up)',
@@ -3864,7 +3945,7 @@ app.post('/api/whatsapp/chats/new', async (req, res) => {
         await sock.sendMessage(jid, { text: initialMessage.trim() });
         await sock.sendPresenceUpdate('paused', jid);
 
-        thread.messages.push({
+        appendMessageToThread(thread, {
           id: `msg-${Date.now()}`,
           chatJid: jid,
           senderName: 'Você',
@@ -4301,7 +4382,7 @@ app.post('/api/lead-form/resend-trigger', async (req, res) => {
     const thread = chatThreads.get(entry.jid);
     const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     if (thread) {
-      thread.messages.push({
+      appendMessageToThread(thread, {
         id: `resend-${Date.now()}`,
         chatJid: entry.jid,
         senderName: 'Você (RespondeForm AI)',

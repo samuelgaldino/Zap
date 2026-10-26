@@ -52,6 +52,7 @@ interface LiveMessage {
   fromMe: boolean;
   text: string;
   timestamp: string;
+  timestampMs?: number;
   isAiResponse?: boolean;
   isAudio?: boolean;
   reaction?: string;
@@ -78,6 +79,7 @@ interface ChatThread {
   name: string;
   lastMessage: string;
   lastTimestamp: string;
+  lastMessageAt?: number;
   unreadCount: number;
   messages: LiveMessage[];
   botPausedForThisChat?: boolean;
@@ -144,8 +146,8 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
         }
 
         // Select first chat if none selected
-        if (!selectedJid && data.threads?.length > 0) {
-          setSelectedJid(data.threads[0].jid);
+        if (data.threads?.length > 0) {
+          setSelectedJid((current) => current || data.threads[0].jid);
         }
       }
     } catch (err) {
@@ -161,8 +163,8 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
       if (res.ok) {
         const data = await res.json();
         setThreads(data.threads || []);
-        if (data.threads?.length > 0 && !selectedJid) {
-          setSelectedJid(data.threads[0].jid);
+        if (data.threads?.length > 0) {
+          setSelectedJid((current) => current || data.threads[0].jid);
         }
         setSyncFeedback(
           data.message ||
@@ -191,9 +193,29 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [selectedJid]);
+  }, []);
 
   const activeThread = threads.find((t) => t.jid === selectedJid);
+
+  const handleSelectThread = async (jid: string) => {
+    setSelectedJid(jid);
+    setThreads((current) =>
+      current.map((thread) =>
+        thread.jid === jid ? { ...thread, unreadCount: 0 } : thread
+      )
+    );
+
+    try {
+      const res = await fetch('/api/whatsapp/mark-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jid }),
+      });
+      if (!res.ok) throw new Error('Não foi possível marcar a conversa como lida.');
+    } catch (err) {
+      console.error('Erro ao marcar conversa como lida:', err);
+    }
+  };
 
   // Dissatisfied alerts
   const alertThreads = threads.filter(
@@ -355,20 +377,53 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
   };
 
   // Filtered threads calculation
-  const filteredThreads = threads.filter((t) => {
-    const isGroup = t.jid.endsWith('@g.us');
-    if (typeFilter === 'direct' && isGroup) return false;
-    if (typeFilter === 'group' && !isGroup) return false;
+  const filteredThreads = threads
+    .filter((t) => {
+      const isGroup = t.jid.endsWith('@g.us');
+      if (typeFilter === 'direct' && isGroup) return false;
+      if (typeFilter === 'group' && !isGroup) return false;
 
-    const matchesSearch =
-      t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.lastMessage.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.jid.includes(searchTerm);
+      const matchesSearch =
+        t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        t.lastMessage.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        t.jid.includes(searchTerm);
 
-    if (!matchesSearch) return false;
-    if (sentimentFilter === 'all') return true;
-    return t.sentiment?.sentiment === sentimentFilter;
-  });
+      if (!matchesSearch) return false;
+      if (sentimentFilter === 'all') return true;
+      return t.sentiment?.sentiment === sentimentFilter;
+    })
+    .sort((a, b) => {
+      const unreadDifference = Number(b.unreadCount > 0) - Number(a.unreadCount > 0);
+      if (unreadDifference !== 0) return unreadDifference;
+
+      const activityDifference = (b.lastMessageAt || 0) - (a.lastMessageAt || 0);
+      if (activityDifference !== 0) return activityDifference;
+
+      return a.name.localeCompare(b.name, 'pt-BR');
+    });
+
+  const formatConversationTime = (thread: ChatThread) => {
+    if (!thread.lastMessageAt) return thread.lastTimestamp || '';
+
+    const messageDate = new Date(thread.lastMessageAt);
+    const today = new Date();
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    const startOfMessageDay = new Date(
+      messageDate.getFullYear(),
+      messageDate.getMonth(),
+      messageDate.getDate()
+    ).getTime();
+    const dayDifference = Math.round((startOfToday - startOfMessageDay) / 86_400_000);
+
+    if (dayDifference === 0) {
+      return messageDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    }
+    if (dayDifference === 1) return 'Ontem';
+    if (dayDifference > 1 && dayDifference < 7) {
+      return messageDate.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+    }
+    return messageDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  };
 
   const getSentimentBadge = (sentiment?: SentimentType) => {
     switch (sentiment) {
@@ -875,7 +930,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
                 return (
                   <div
                     key={thread.jid}
-                    onClick={() => setSelectedJid(thread.jid)}
+                    onClick={() => void handleSelectThread(thread.jid)}
                     className={`w-full text-left p-3.5 transition flex items-start gap-3 cursor-pointer group relative ${
                       isSelected
                         ? 'bg-[#101b33] border-l-4 border-blue-500 text-white'
@@ -920,7 +975,7 @@ export const LiveInbox: React.FC<LiveInboxProps> = ({ onGoToConnect }) => {
                           )}
                         </h4>
                         <span className="text-[10px] text-[#64748b] font-mono shrink-0">
-                          {thread.lastTimestamp}
+                          {formatConversationTime(thread)}
                         </span>
                       </div>
 
