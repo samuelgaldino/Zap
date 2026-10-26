@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   QrCode,
   Smartphone,
@@ -50,6 +50,35 @@ export const WhatsAppConnect: React.FC<WhatsAppConnectProps> = ({
   });
   const [scheduleStatus, setScheduleStatus] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const autoConnectAttempted = useRef(false);
+
+  const handleConnect = async () => {
+    setLoading(true);
+    setConnectError(null);
+    setWaStatus((prev) => ({ ...prev, status: 'connecting', qrDataUrl: undefined }));
+    try {
+      const res = await fetch('/api/whatsapp/connect', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || 'Não foi possível iniciar a conexão com o WhatsApp.');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao gerar o QR Code.';
+      setConnectError(message);
+      setWaStatus((prev) => ({ ...prev, status: 'disconnected', qrDataUrl: undefined }));
+      console.error('Erro ao gerar QR Code do WhatsApp:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Generate the first QR automatically when this screen is opened.
+  useEffect(() => {
+    if (waStatus.status !== 'disconnected' || autoConnectAttempted.current) return;
+    autoConnectAttempted.current = true;
+    void handleConnect();
+  }, [waStatus.status]);
 
   // Poll status every 2 seconds
   useEffect(() => {
@@ -81,17 +110,6 @@ export const WhatsAppConnect: React.FC<WhatsAppConnectProps> = ({
       clearInterval(interval);
     };
   }, []);
-
-  const handleConnect = async () => {
-    setLoading(true);
-    try {
-      await fetch('/api/whatsapp/connect', { method: 'POST' });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleDisconnect = async () => {
     if (!confirm('Deseja realmente desconectar o seu número de WhatsApp do bot?')) return;
@@ -404,6 +422,12 @@ export const WhatsAppConnect: React.FC<WhatsAppConnectProps> = ({
                     QR Code atualiza automaticamente
                   </div>
                 </div>
+
+                {connectError && (
+                  <div className="mt-3 max-w-sm rounded-xl border border-rose-500/40 bg-rose-950/40 px-4 py-3 text-center text-xs text-rose-200">
+                    {connectError}
+                  </div>
+                )}
 
                 <button
                   onClick={handleConnect}
